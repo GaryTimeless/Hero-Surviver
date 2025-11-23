@@ -6,8 +6,87 @@
   <title>Hero Survival Prototype</title>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0b1220;
+      color: #e5e7eb;
+    }
+    .panel {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      padding: 16px;
+      box-sizing: border-box;
+      background: rgba(10, 14, 26, 0.9);
+      display: none;
+      z-index: 10;
+    }
+    .panel.visible { display: block; }
+    .row { margin-bottom: 8px; }
+    input, button {
+      padding: 8px 10px;
+      font-size: 14px;
+      border: 1px solid #1f2937;
+      border-radius: 4px;
+      background: #111827;
+      color: #e5e7eb;
+    }
+    button {
+      cursor: pointer;
+      background: #2563eb;
+      border-color: #1d4ed8;
+    }
+    button:disabled {
+      background: #1f2937;
+      border-color: #111827;
+      cursor: not-allowed;
+    }
+    #players-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    #players-list li {
+      margin-bottom: 4px;
+    }
+    #game-container {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+  </style>
 </head>
 <body>
+  <div id="menu-panel" class="panel visible">
+    <div class="row">
+      <label for="player-name">Name:</label>
+      <input id="player-name" type="text" placeholder="Hero" maxlength="12">
+    </div>
+    <div class="row">
+      <button id="create-room-btn">Create Room</button>
+      <input id="room-code-input" type="text" placeholder="Room code" maxlength="8">
+      <button id="join-room-btn">Join Room</button>
+    </div>
+    <div class="row" id="menu-status"></div>
+  </div>
+
+  <div id="lobby-panel" class="panel">
+    <div class="row">
+      <span>Room: <strong id="room-label">----</strong></span>
+    </div>
+    <div class="row">
+      <button id="ready-btn">Ready</button>
+      <button id="start-btn" disabled>Start Game (host)</button>
+    </div>
+    <div class="row">
+      <ul id="players-list"></ul>
+    </div>
+    <div class="row" id="lobby-status"></div>
+  </div>
+
   <div id="game-container"></div>
   <script src="main.js"></script>
 </body>
