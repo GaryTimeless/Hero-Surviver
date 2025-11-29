@@ -29,6 +29,11 @@ const MAX_WAVE = 5;
 const UPGRADE_COST = 5;
 const MAX_WEAPON_LEVEL = 5;
 const SHOP_PHASE_MS = 5000;
+const GATE = {
+  x: ARENA.width / 2,
+  y: 40,
+  spread: 60,
+};
 
 // --- State ---
 const rooms = new Map();
@@ -151,7 +156,6 @@ const alivePlayers = (room) => Array.from(room.players.values()).filter((p) => !
 
 const handleGameOver = (room, reason) => {
   room.running = false;
-  room.running = false;
   clearInterval(room.loops.enemyIntervalId);
   if (room.loops.nextWaveTimeoutId) clearTimeout(room.loops.nextWaveTimeoutId);
   room.loops.enemyIntervalId = null;
@@ -188,10 +192,24 @@ const spawnEnemyWave = (room) => {
   const count = Math.min(room.waveNumber * 2, 20);
   for (let i = 0; i < count; i += 1) {
     const enemy = createEnemy(room.waveNumber);
+    // Override random position with gate position
+    const offsetX = (Math.random() - 0.5) * GATE.spread;
+    enemy.x = GATE.x + offsetX;
+    enemy.y = GATE.y;
     room.enemies.set(enemy.id, enemy);
   }
   emitEnemies(room);
   io.to(room.id).emit('waveUpdated', { wave: room.waveNumber });
+
+  // Two-step spawn: freeze enemies for a short time so players see where they come from
+  room.phase = 'spawning';
+  if (room.loops.nextWaveTimeoutId) clearTimeout(room.loops.nextWaveTimeoutId);
+  room.loops.nextWaveTimeoutId = setTimeout(() => {
+    if (!room.running) return;
+    room.phase = 'combat';
+    // Reset enemy tick timestamp so they DON'T jump after spawn pause
+    room.loops.lastEnemyTick = Date.now();
+  }, 2000);
 };
 
 const despawnEnemies = (room, now) => {

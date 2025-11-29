@@ -128,6 +128,7 @@ class ArenaScene extends Phaser.Scene {
 
     this.createHud();
     this.drawUpgradePad();
+    this.drawGate();
     this.resetWorld();
     if (Array.isArray(state.pendingPlayers)) {
       state.pendingPlayers.forEach((p) => this.addPlayer(p, p.id === state.socket.id));
@@ -155,6 +156,22 @@ class ArenaScene extends Phaser.Scene {
     const pad = this.add.image(ARENA.width / 2, ARENA.height / 2, TEXTURES.upgradePad);
     pad.setAlpha(0.15);
     this.upgradePadSprite = pad;
+  }
+
+  drawGate() {
+    const w = this.scale.width;
+    const gateX = w / 2;
+    const gateY = 10;
+
+    const g = this.add.graphics();
+    g.lineStyle(4, 0xff0000, 1);
+    // left bar
+    g.moveTo(gateX - 20, gateY);
+    g.lineTo(gateX - 20, gateY + 40);
+    // right bar
+    g.moveTo(gateX + 20, gateY);
+    g.lineTo(gateX + 20, gateY + 40);
+    g.strokePath();
   }
 
   createHud() {

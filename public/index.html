@@ -3,91 +3,328 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hero Survival Prototype</title>
+  <title>Hero Survival</title>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --bg-dark: #0f172a;
+      --bg-card: rgba(30, 41, 59, 0.7);
+      --accent-primary: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-secondary: #8b5cf6;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --border-color: rgba(255, 255, 255, 0.1);
+    }
+
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
-      background: #0b1220;
-      color: #e5e7eb;
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }
-    .panel {
+
+    /* Background animation effect */
+    body::before {
+      content: '';
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
-      padding: 16px;
-      box-sizing: border-box;
-      background: rgba(10, 14, 26, 0.9);
-      display: none;
+      height: 100%;
+      background: radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.1) 0%, transparent 50%);
+      animation: pulse 10s infinite alternate;
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.5; transform: scale(1); }
+      100% { opacity: 0.8; transform: scale(1.1); }
+    }
+
+    #game-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+    }
+
+    /* UI Overlay Container */
+    .ui-overlay {
+      position: relative;
       z-index: 10;
+      width: 100%;
+      max-width: 480px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      pointer-events: none; /* Let clicks pass through to game if needed, but panels will re-enable pointer-events */
     }
-    .panel.visible { display: block; }
-    .row { margin-bottom: 8px; }
-    input, button {
-      padding: 8px 10px;
+
+    /* Panels */
+    .panel {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      display: none;
+      pointer-events: auto;
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    .panel.visible {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Typography */
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      font-weight: 800;
+      text-align: center;
+      background: linear-gradient(to right, #60a5fa, #c084fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin: 8px 0 0;
+      text-align: center;
+      color: var(--text-muted);
       font-size: 14px;
-      border: 1px solid #1f2937;
-      border-radius: 4px;
-      background: #111827;
-      color: #e5e7eb;
     }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text-main);
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 8px;
+    }
+
+    /* Forms & Inputs */
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    input {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 16px;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+    }
+
+    /* Buttons */
+    .btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
     button {
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 16px;
       cursor: pointer;
-      background: #2563eb;
-      border-color: #1d4ed8;
+      transition: all 0.2s;
+      border: none;
     }
-    button:disabled {
-      background: #1f2937;
-      border-color: #111827;
+
+    .btn-primary {
+      background: var(--accent-primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:disabled {
+      background: #334155;
+      color: #94a3b8;
       cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
     }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--text-muted);
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    /* Join Row */
+    .join-row {
+      display: flex;
+      gap: 8px;
+    }
+    .join-row input {
+      flex: 1;
+      text-transform: uppercase;
+    }
+
+    /* Lobby Specific */
     #players-list {
       list-style: none;
       padding: 0;
       margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
+
     #players-list li {
-      margin-bottom: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 10px 14px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
     }
-    #game-container {
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
+
+    .room-code-display {
+      text-align: center;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      color: var(--accent-secondary);
+      margin: 10px 0;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px dashed var(--border-color);
+    }
+
+    .status-msg {
+      font-size: 13px;
+      color: #ef4444;
+      text-align: center;
+      min-height: 20px;
+    }
+
+    .footer {
+      position: absolute;
+      bottom: 20px;
+      width: 100%;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.2);
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
-  <div id="menu-panel" class="panel visible">
-    <div class="row">
-      <label for="player-name">Name:</label>
-      <input id="player-name" type="text" placeholder="Hero" maxlength="12">
-    </div>
-    <div class="row">
-      <button id="create-room-btn">Create Room</button>
-      <input id="room-code-input" type="text" placeholder="Room code" maxlength="8">
-      <button id="join-room-btn">Join Room</button>
-    </div>
-    <div class="row" id="menu-status"></div>
-  </div>
-
-  <div id="lobby-panel" class="panel">
-    <div class="row">
-      <span>Room: <strong id="room-label">----</strong></span>
-    </div>
-    <div class="row">
-      <button id="ready-btn">Ready</button>
-      <button id="start-btn" disabled>Start Game (host)</button>
-    </div>
-    <div class="row">
-      <ul id="players-list"></ul>
-    </div>
-    <div class="row" id="lobby-status"></div>
-  </div>
 
   <div id="game-container"></div>
+
+  <div class="ui-overlay">
+    <!-- MENU PANEL -->
+    <div id="menu-panel" class="panel visible">
+      <div>
+        <h1>HERO SURVIVAL</h1>
+        <p class="subtitle">Co-op survival in a swarm of enemies</p>
+      </div>
+
+      <div class="input-group">
+        <label for="player-name">Your Name</label>
+        <input id="player-name" type="text" placeholder="Enter your name" maxlength="12">
+      </div>
+
+      <div class="btn-group">
+        <button id="create-room-btn" class="btn-primary">Create New Room</button>
+        
+        <div style="text-align: center; font-size: 12px; color: var(--text-muted); margin: 4px 0;">— OR —</div>
+        
+        <div class="join-row">
+          <input id="room-code-input" type="text" placeholder="CODE" maxlength="8">
+          <button id="join-room-btn" class="btn-secondary">Join</button>
+        </div>
+      </div>
+
+      <div id="menu-status" class="status-msg"></div>
+    </div>
+
+    <!-- LOBBY PANEL -->
+    <div id="lobby-panel" class="panel">
+      <div>
+        <h1>LOBBY</h1>
+        <div class="room-code-display">
+          <span id="room-label">----</span>
+        </div>
+        <p class="subtitle" style="margin-top: -10px; font-size: 12px;">Share this code with friends</p>
+      </div>
+
+      <div class="section-title">Players</div>
+      <ul id="players-list">
+        <!-- Players injected here -->
+      </ul>
+
+      <div class="btn-group" style="margin-top: 10px;">
+        <button id="ready-btn" class="btn-secondary">Ready Up</button>
+        <button id="start-btn" class="btn-primary" disabled>Start Game</button>
+      </div>
+
+      <div id="lobby-status" class="status-msg"></div>
+    </div>
+  </div>
+
+  <div class="footer">Hero Survival – Prototype v0.2</div>
+
   <script src="main.js"></script>
 </body>
 </html>
