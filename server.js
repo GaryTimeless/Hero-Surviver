@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Constants ---
-const ARENA = { width: 800, height: 600, padding: 20 };
+const ARENA = { width: 1600, height: 900, padding: 20 };
 const PLAYER_MAX_HP = 100;
 const ENEMY_MAX_HP = 10;
 const PLAYER_HIT_DISTANCE = 30;
@@ -27,13 +27,51 @@ const ENEMY_TICK_MS = 100;
 const ENEMY_DESPAWN_MS = 30000;
 const MAX_WAVE = 5;
 const UPGRADE_COST = 5;
-const MAX_WEAPON_LEVEL = 5;
+const MAX_STAT_LEVEL = 5;
 const SHOP_PHASE_MS = 5000;
 const GATE = {
   x: ARENA.width / 2,
   y: 40,
-  spread: 60,
+  spread: 120, // Increased spread for larger arena
 };
+
+const BASE = {
+  x: ARENA.width / 2,
+  y: ARENA.height - 80,
+  maxHp: 100,
+};
+
+// Left path (spawn -> left lane -> base)
+const PATH_LEFT = [
+  { x: ARENA.width / 2, y: 150 },      // Below gate
+  { x: 350, y: 200 },                   // Entering left lane
+  { x: 200, y: 350 },                   // Left vertical descent
+  { x: 200, y: 650 },                   // Bottom of left side
+  { x: ARENA.width / 2 - 100, y: 750 }, // Approaching base from left
+];
+
+// Right path (spawn -> right lane -> base)
+const PATH_RIGHT = [
+  { x: ARENA.width / 2, y: 150 },       // Below gate
+  { x: 1250, y: 200 },                  // Entering right lane
+  { x: 1400, y: 350 },                  // Right vertical descent
+  { x: 1400, y: 650 },                  // Bottom of right side
+  { x: ARENA.width / 2 + 100, y: 750 }, // Approaching base from right
+];
+
+const ENEMY_DETECT_PLAYER_RADIUS = 200;
+const ENEMY_LOSE_PLAYER_RADIUS = 260;
+const ENEMY_BASE_CONTACT_DISTANCE = 40;
+const BASE_DAMAGE_PER_TICK = 3;
+
+// Server-side wall constraints (matching client LEVEL_WALLS)
+const LANE_WALLS = [
+  { x: 100, y: 80, width: 1400, height: 40 },
+  { x: 100, y: 80, width: 40, height: 740 },
+  { x: 1460, y: 80, width: 40, height: 740 },
+  { x: 300, y: 280, width: 1000, height: 40 },
+  { x: 300, y: 580, width: 1000, height: 40 },
+];
 
 // --- State ---
 const rooms = new Map();
@@ -61,7 +99,10 @@ const createPlayer = (id, name) => {
     maxHp: PLAYER_MAX_HP,
     isDead: false,
     coins: 0,
-    weaponLevel: 1,
+    isDead: false,
+    coins: 0,
+    armorLevel: 1,
+    attackLevel: 1,
     isReady: false,
     isHost: false,
   };
@@ -77,7 +118,40 @@ const createEnemy = (wave) => {
     hp: ENEMY_MAX_HP,
     maxHp: ENEMY_MAX_HP,
     wave,
+    mode: 'path',
+    pathIndex: 0,
+    chaseTargetId: null,
+    pathNodes: null, // Will be assigned at spawn
   };
+};
+
+const constrainToLane = (x, y) => {
+  // Simple constraint: keep within arena and roughly away from walls
+  // For a prototype, use a simple center-bias approach
+  let newX = Math.max(ARENA.padding + 50, Math.min(ARENA.width - ARENA.padding - 50, x));
+  let newY = Math.max(ARENA.padding + 50, Math.min(ARENA.height - ARENA.padding - 50, y));
+
+  // Check collision with walls and push out if needed
+  for (const wall of LANE_WALLS) {
+    // Simple AABB overlap check with 20px buffer
+    const buffer = 20;
+    if (newX + buffer > wall.x && newX - buffer < wall.x + wall.width &&
+      newY + buffer > wall.y && newY - buffer < wall.y + wall.height) {
+      // Push out to nearest edge
+      const pushLeft = Math.abs(newX - (wall.x + wall.width));
+      const pushRight = Math.abs(newX - wall.x);
+      const pushUp = Math.abs(newY - (wall.y + wall.height));
+      const pushDown = Math.abs(newY - wall.y);
+
+      const minPush = Math.min(pushLeft, pushRight, pushUp, pushDown);
+      if (minPush === pushLeft) newX = wall.x + wall.width + buffer;
+      else if (minPush === pushRight) newX = wall.x - buffer;
+      else if (minPush === pushUp) newY = wall.y + wall.height + buffer;
+      else newY = wall.y - buffer;
+    }
+  }
+
+  return { x: newX, y: newY };
 };
 
 const createProjectile = (player, dir) => {
@@ -91,7 +165,8 @@ const createProjectile = (player, dir) => {
     vx: norm.x * PROJECTILE_SPEED,
     vy: norm.y * PROJECTILE_SPEED,
     spawnTime: Date.now(),
-    damage: PROJECTILE_DAMAGE_BASE + (player.weaponLevel - 1) * PROJECTILE_DAMAGE_PER_LEVEL,
+    spawnTime: Date.now(),
+    damage: PROJECTILE_DAMAGE_BASE * player.attackLevel,
   };
 };
 
@@ -104,16 +179,24 @@ const createRoom = (roomId) => ({
   coins: new Map(),
   waveNumber: 0,
   running: false,
-  phase: 'lobby', // 'lobby' | 'combat' | 'shop'
+  phase: 'lobby', // 'lobby', 'combat', 'shop', 'spawning'
+  baseHp: BASE.maxHp,
+  baseMaxHp: BASE.maxHp,
+  enemySpawnCount: 0, // For alternating path assignment
   loops: {
     enemyIntervalId: null,
     lastEnemyTick: Date.now(),
     nextWaveTimeoutId: null,
   },
-  upgradePad: {
-    x: ARENA.width / 2,
-    y: ARENA.height / 2,
-    radius: 30,
+  armorPad: {
+    x: ARENA.width * 0.25,
+    y: ARENA.height * 0.75,
+    radius: 50,
+  },
+  attackPad: {
+    x: ARENA.width * 0.75,
+    y: ARENA.height * 0.75,
+    radius: 50,
   },
 });
 
@@ -123,6 +206,8 @@ const emitRoomState = (room) => {
     hostId: room.hostId,
     wave: room.waveNumber,
     running: room.running,
+    baseHp: room.baseHp,
+    baseMaxHp: room.baseMaxHp,
     players: Array.from(room.players.values()).map((p) => ({
       id: p.id,
       name: p.name,
@@ -132,7 +217,8 @@ const emitRoomState = (room) => {
       maxHp: p.maxHp,
       isDead: p.isDead,
       coins: p.coins,
-      weaponLevel: p.weaponLevel,
+      armorLevel: p.armorLevel,
+      attackLevel: p.attackLevel,
       x: p.x,
       y: p.y,
     })),
@@ -173,7 +259,8 @@ const handleGameOver = (room, reason) => {
     p.hp = PLAYER_MAX_HP;
     p.maxHp = PLAYER_MAX_HP;
     p.coins = 0;
-    p.weaponLevel = 1;
+    p.armorLevel = 1;
+    p.attackLevel = 1;
   });
   emitEnemies(room);
   emitProjectiles(room);
@@ -192,6 +279,12 @@ const spawnEnemyWave = (room) => {
   const count = Math.min(room.waveNumber * 2, 20);
   for (let i = 0; i < count; i += 1) {
     const enemy = createEnemy(room.waveNumber);
+
+    // Assign path: alternate left/right
+    const useLeft = room.enemySpawnCount % 2 === 0;
+    room.enemySpawnCount++;
+    enemy.pathNodes = useLeft ? PATH_LEFT : PATH_RIGHT;
+
     // Override random position with gate position
     const offsetX = (Math.random() - 0.5) * GATE.spread;
     enemy.x = GATE.x + offsetX;
@@ -210,6 +303,36 @@ const spawnEnemyWave = (room) => {
     // Reset enemy tick timestamp so they DON'T jump after spawn pause
     room.loops.lastEnemyTick = Date.now();
   }, 2000);
+};
+
+const restartGame = (room) => {
+  if (room.running) return;
+  stopRoomLoops(room);
+
+  // Reset room state
+  room.waveNumber = 0;
+  room.enemies.clear();
+  room.projectiles.clear();
+  room.coins.clear();
+  room.baseHp = BASE.maxHp;
+  room.baseMaxHp = BASE.maxHp;
+  room.phase = 'combat';
+
+  // Reset players
+  room.players.forEach((p) => {
+    p.hp = PLAYER_MAX_HP;
+    p.maxHp = PLAYER_MAX_HP;
+    p.isDead = false;
+    p.coins = 0;
+    p.armorLevel = 1;
+    p.attackLevel = 1;
+    p.isReady = true; // Auto-ready for restart
+    const pos = randomInArena();
+    p.x = pos.x;
+    p.y = pos.y;
+  });
+
+  startRoomLoops(room);
 };
 
 const despawnEnemies = (room, now) => {
@@ -246,7 +369,8 @@ const applyEnemyDamageToPlayers = (room) => {
   damageMap.forEach((damage, playerId) => {
     const player = room.players.get(playerId);
     if (!player || player.isDead) return;
-    player.hp = Math.max(0, player.hp - damage);
+    const damageTaken = Math.max(1, Math.round(damage / player.armorLevel));
+    player.hp = Math.max(0, player.hp - damageTaken);
     hpUpdates.push({ id: player.id, hp: player.hp, maxHp: player.maxHp });
     if (player.hp === 0) {
       player.isDead = true;
@@ -258,42 +382,144 @@ const applyEnemyDamageToPlayers = (room) => {
 };
 
 const moveEnemies = (room) => {
-  if (!room.running || room.phase !== 'combat') return;
+  if (room.phase !== 'combat') return;
   const now = Date.now();
-  const deltaSeconds = Math.max((now - room.loops.lastEnemyTick) / 1000, 0);
+  const deltaSeconds = (now - room.loops.lastEnemyTick) / 1000;
   room.loops.lastEnemyTick = now;
 
   const alive = alivePlayers(room);
-  if (alive.length === 0) {
-    handleGameOver(room, 'all-dead');
-    return;
-  }
+  const attackingEnemies = [];
 
   room.enemies.forEach((enemy) => {
-    let closest = null;
-    let closestDistSq = Number.POSITIVE_INFINITY;
+    // 1. Detection: Check for nearby players to chase
+    let closestPlayer = null;
+    let closestDistSq = Infinity;
     alive.forEach((player) => {
       const dx = player.x - enemy.x;
       const dy = player.y - enemy.y;
       const distSq = dx * dx + dy * dy;
       if (distSq < closestDistSq) {
         closestDistSq = distSq;
-        closest = player;
+        closestPlayer = player;
       }
     });
-    if (!closest) return;
-    const dirX = closest.x - enemy.x;
-    const dirY = closest.y - enemy.y;
-    const len = Math.hypot(dirX, dirY) || 1;
-    enemy.x += (dirX / len) * ENEMY_SPEED * deltaSeconds;
-    enemy.y += (dirY / len) * ENEMY_SPEED * deltaSeconds;
-    enemy.x = Math.max(ARENA.padding, Math.min(ARENA.width - ARENA.padding, enemy.x));
-    enemy.y = Math.max(ARENA.padding, Math.min(ARENA.height - ARENA.padding, enemy.y));
+
+    if (closestPlayer && closestDistSq <= ENEMY_DETECT_PLAYER_RADIUS * ENEMY_DETECT_PLAYER_RADIUS) {
+      enemy.mode = 'chase';
+      enemy.chaseTargetId = closestPlayer.id;
+    }
+
+    // 2. State Machine
+    let targetX = enemy.x;
+    let targetY = enemy.y;
+    let move = true;
+
+    switch (enemy.mode) {
+      case 'path': {
+        if (!enemy.pathNodes || enemy.pathIndex >= enemy.pathNodes.length) {
+          enemy.mode = 'goal';
+          break;
+        }
+        const node = enemy.pathNodes[enemy.pathIndex];
+        targetX = node.x;
+        targetY = node.y;
+        const dx = targetX - enemy.x;
+        const dy = targetY - enemy.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < 100) { // Reached node
+          enemy.pathIndex++;
+          if (enemy.pathIndex >= enemy.pathNodes.length) {
+            enemy.mode = 'goal';
+          }
+        }
+        break;
+      }
+      case 'goal': {
+        targetX = BASE.x;
+        targetY = BASE.y;
+        const dx = targetX - enemy.x;
+        const dy = targetY - enemy.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq <= ENEMY_BASE_CONTACT_DISTANCE * ENEMY_BASE_CONTACT_DISTANCE) {
+          enemy.mode = 'attackBase';
+          move = false;
+        }
+        break;
+      }
+      case 'chase': {
+        const target = room.players.get(enemy.chaseTargetId);
+        if (!target || target.isDead) {
+          // Target lost/dead, return to path/goal
+          enemy.mode = enemy.pathIndex < PATH_NODES.length ? 'path' : 'goal';
+          enemy.chaseTargetId = null;
+        } else {
+          const dx = target.x - enemy.x;
+          const dy = target.y - enemy.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq > ENEMY_LOSE_PLAYER_RADIUS * ENEMY_LOSE_PLAYER_RADIUS) {
+            // Target too far, return to path/goal
+            enemy.mode = enemy.pathIndex < PATH_NODES.length ? 'path' : 'goal';
+            enemy.chaseTargetId = null;
+          } else {
+            targetX = target.x;
+            targetY = target.y;
+          }
+        }
+        break;
+      }
+      case 'attackBase': {
+        move = false;
+        attackingEnemies.push(enemy);
+        break;
+      }
+    }
+
+    // 3. Movement
+    if (move) {
+      const dx = targetX - enemy.x;
+      const dy = targetY - enemy.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > 0) {
+        const dirX = dx / len;
+        const dirY = dy / len;
+        let nextX = enemy.x + dirX * ENEMY_SPEED * deltaSeconds;
+        let nextY = enemy.y + dirY * ENEMY_SPEED * deltaSeconds;
+
+        // Apply lane constraints
+        const constrained = constrainToLane(nextX, nextY);
+        enemy.x = constrained.x;
+        enemy.y = constrained.y;
+      }
+    } else {
+      // Even if not moving, ensure position is valid
+      const constrained = constrainToLane(enemy.x, enemy.y);
+      enemy.x = constrained.x;
+      enemy.y = constrained.y;
+    }
   });
 
-  despawnEnemies(room, now);
-  emitEnemies(room);
+  // 4. Base Damage
+  if (attackingEnemies.length > 0) {
+    const totalDamage = BASE_DAMAGE_PER_TICK * attackingEnemies.length;
+    const oldHp = room.baseHp;
+    room.baseHp = Math.max(0, room.baseHp - totalDamage);
+
+    // Emit base HP update if it changed
+    if (room.baseHp !== oldHp) {
+      io.to(room.id).emit('baseHpUpdated', {
+        baseHp: room.baseHp,
+        baseMaxHp: room.baseMaxHp
+      });
+    }
+  }
+
+  if (room.baseHp === 0) {
+    handleGameOver(room, 'base-destroyed');
+    return;
+  }
+
   applyEnemyDamageToPlayers(room);
+  emitEnemies(room);
 };
 
 const moveProjectiles = (room) => {
@@ -359,7 +585,12 @@ const pickupCoins = (room) => {
       const distSq = dx * dx + dy * dy;
       if (distSq <= PLAYER_HIT_DISTANCE * PLAYER_HIT_DISTANCE) {
         player.coins += coin.value;
-        updates.push({ id: player.id, coins: player.coins, weaponLevel: player.weaponLevel });
+        updates.push({
+          id: player.id,
+          coins: player.coins,
+          armorLevel: player.armorLevel,
+          attackLevel: player.attackLevel
+        });
         toRemove.push(id);
       }
     });
@@ -373,15 +604,36 @@ const applyUpgradePad = (room) => {
   const updates = [];
   room.players.forEach((player) => {
     if (player.isDead) return;
-    if (player.weaponLevel >= MAX_WEAPON_LEVEL) return;
-    const dx = player.x - room.upgradePad.x;
-    const dy = player.y - room.upgradePad.y;
-    const distSq = dx * dx + dy * dy;
-    if (distSq <= room.upgradePad.radius * room.upgradePad.radius) {
-      if (player.coins >= UPGRADE_COST) {
+
+    // Armor Pad (Left)
+    const dxArmor = player.x - room.armorPad.x;
+    const dyArmor = player.y - room.armorPad.y;
+    if (dxArmor * dxArmor + dyArmor * dyArmor <= room.armorPad.radius * room.armorPad.radius) {
+      if (player.coins >= UPGRADE_COST && player.armorLevel < MAX_STAT_LEVEL) {
         player.coins -= UPGRADE_COST;
-        player.weaponLevel += 1;
-        updates.push({ id: player.id, coins: player.coins, weaponLevel: player.weaponLevel });
+        player.armorLevel += 1;
+        updates.push({
+          id: player.id,
+          coins: player.coins,
+          armorLevel: player.armorLevel,
+          attackLevel: player.attackLevel
+        });
+      }
+    }
+
+    // Attack Pad (Right)
+    const dxAttack = player.x - room.attackPad.x;
+    const dyAttack = player.y - room.attackPad.y;
+    if (dxAttack * dxAttack + dyAttack * dyAttack <= room.attackPad.radius * room.attackPad.radius) {
+      if (player.coins >= UPGRADE_COST && player.attackLevel < MAX_STAT_LEVEL) {
+        player.coins -= UPGRADE_COST;
+        player.attackLevel += 1;
+        updates.push({
+          id: player.id,
+          coins: player.coins,
+          armorLevel: player.armorLevel,
+          attackLevel: player.attackLevel
+        });
       }
     }
   });
@@ -412,6 +664,8 @@ const startRoomLoops = (room) => {
   room.enemies.clear();
   room.projectiles.clear();
   room.coins.clear();
+  room.baseHp = BASE.maxHp;
+  room.baseMaxHp = BASE.maxHp;
   room.players.forEach((p) => {
     const pos = randomInArena();
     p.x = pos.x;
@@ -524,15 +778,15 @@ io.on('connection', (socket) => {
 
   socket.on('startGame', () => {
     const room = rooms.get(socket.data.roomId);
-    if (!room) return;
-    const player = room.players.get(socket.id);
-    if (!player || room.hostId !== socket.id) return;
-    const hasReady = Array.from(room.players.values()).some((p) => p.isReady);
-    if (!hasReady) {
-      socket.emit('errorMessage', { message: 'No ready players' });
-      return;
-    }
+    if (!room || room.hostId !== socket.id) return;
+    if (room.running) return;
     startRoomLoops(room);
+  });
+
+  socket.on('requestRestartGame', () => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room || room.hostId !== socket.id) return;
+    restartGame(room);
   });
 
   socket.on('playerMovement', (data) => {

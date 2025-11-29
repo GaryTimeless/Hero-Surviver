@@ -33,8 +33,20 @@ const state = {
   pendingPlayers: null,
 };
 
-const ARENA = { width: 800, height: 600 };
+const ARENA = { width: 1600, height: 900 };
 const FIRE_COOLDOWN_MS = 300;
+
+// Define the U-shaped corridor walls
+const LEVEL_WALLS = [
+  // Outer walls (U-shape)
+  { x: 100, y: 80, width: 1400, height: 40 },   // Top horizontal
+  { x: 100, y: 80, width: 40, height: 740 },    // Left vertical
+  { x: 1460, y: 80, width: 40, height: 740 },   // Right vertical
+
+  // Inner horizontal bars (creating the lanes)
+  { x: 300, y: 280, width: 1000, height: 40 },  // Top inner horizontal
+  { x: 300, y: 580, width: 1000, height: 40 },  // Bottom inner horizontal
+];
 
 const createCircleTexture = (scene, key, color, size = 32) => {
   if (scene.textures.exists(key)) return;
@@ -102,10 +114,14 @@ class ArenaScene extends Phaser.Scene {
     this.hpText = null;
     this.waveText = null;
     this.coinText = null;
-    this.weaponText = null;
+    this.coinText = null;
+    this.attackText = null;
+    this.armorText = null;
+    this.baseText = null;
     this.deathText = null;
     this.shopText = null;
-    this.upgradePad = null;
+    this.armorPad = null;
+    this.attackPad = null;
   }
 
   preload() { }
@@ -116,7 +132,8 @@ class ArenaScene extends Phaser.Scene {
     createCircleTexture(this, TEXTURES.remote, 0x3b82f6);
     createCircleTexture(this, TEXTURES.projectile, 0xf8fafc, 12);
     createCircleTexture(this, TEXTURES.coin, 0xf59e0b, 14);
-    createCircleTexture(this, TEXTURES.upgradePad, 0x22c55e, 80);
+    createCircleTexture(this, TEXTURES.projectile, 0xf8fafc, 12);
+    createCircleTexture(this, TEXTURES.coin, 0xf59e0b, 14);
 
     this.keys = this.input.keyboard.addKeys({
       W: Phaser.Input.Keyboard.KeyCodes.W,
@@ -126,8 +143,9 @@ class ArenaScene extends Phaser.Scene {
       SPACE: Phaser.Input.Keyboard.KeyCodes.SPACE,
     });
 
+    this.drawCorridorAndBase();
     this.createHud();
-    this.drawUpgradePad();
+    this.drawShopPads();
     this.drawGate();
     this.resetWorld();
     if (Array.isArray(state.pendingPlayers)) {
@@ -151,11 +169,51 @@ class ArenaScene extends Phaser.Scene {
     if (this.deathText) this.deathText.setVisible(false);
   }
 
-  drawUpgradePad() {
-    if (this.upgradePadSprite) this.upgradePadSprite.destroy();
-    const pad = this.add.image(ARENA.width / 2, ARENA.height / 2, TEXTURES.upgradePad);
-    pad.setAlpha(0.15);
-    this.upgradePadSprite = pad;
+  drawCorridorAndBase() {
+    // Draw walls using LEVEL_WALLS
+    const wallsG = this.add.graphics();
+    wallsG.fillStyle(0x3b82f6, 0.3); // Light blue walls
+    LEVEL_WALLS.forEach(wall => {
+      wallsG.fillRect(wall.x, wall.y, wall.width, wall.height);
+    });
+
+    // Base
+    const baseRadius = 40;
+    const baseY = ARENA.height - 80;
+    const baseX = ARENA.width / 2;
+    const baseG = this.add.graphics();
+    baseG.fillStyle(0x22d3ee, 0.5);
+    baseG.fillCircle(baseX, baseY, baseRadius);
+
+    // Base Label
+    this.add.text(baseX, baseY, 'BASE', {
+      fontFamily: 'Arial', fontSize: '12px', color: '#22d3ee'
+    }).setOrigin(0.5);
+  }
+
+  drawShopPads() {
+    if (this.armorPad) this.armorPad.destroy();
+    if (this.attackPad) this.attackPad.destroy();
+
+    // Armor Pad (Left) - Blue Semicircle
+    const armorG = this.add.graphics();
+    armorG.fillStyle(0x3b82f6, 0.3);
+    armorG.fillCircle(0, 0, 50);
+    this.armorPad = this.add.container(ARENA.width * 0.25, ARENA.height * 0.75, [armorG]);
+    const armorLabel = this.add.text(0, 0, 'ARMOR\n5 Coins', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#3b82f6', align: 'center'
+    }).setOrigin(0.5);
+    this.armorPad.add(armorLabel);
+
+    // Attack Pad (Right) - Red Semicircle
+    const attackG = this.add.graphics();
+    attackG.fillStyle(0xef4444, 0.3);
+    attackG.fillCircle(0, 0, 50);
+    this.attackPad = this.add.container(ARENA.width * 0.75, ARENA.height * 0.75, [attackG]);
+    const attackLabel = this.add.text(0, 0, 'ATTACK\n5 Coins', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#ef4444', align: 'center'
+    }).setOrigin(0.5);
+    this.attackPad.add(attackLabel);
   }
 
   drawGate() {
@@ -177,7 +235,15 @@ class ArenaScene extends Phaser.Scene {
   createHud() {
     this.hpText = this.add.text(16, 16, 'HP: --/--', { fontFamily: 'Arial', fontSize: '16px', color: '#ffffff' });
     this.coinText = this.add.text(16, 36, 'Coins: 0', { fontFamily: 'Arial', fontSize: '16px', color: '#fbbf24' });
-    this.weaponText = this.add.text(16, 56, 'Weapon: Lv1', { fontFamily: 'Arial', fontSize: '16px', color: '#a5b4fc' });
+    this.hpText = this.add.text(16, 16, 'HP: --/--', { fontFamily: 'Arial', fontSize: '16px', color: '#ffffff' });
+    this.coinText = this.add.text(16, 36, 'Coins: 0', { fontFamily: 'Arial', fontSize: '16px', color: '#fbbf24' });
+    this.attackText = this.add.text(16, 56, 'Atk: Lv1', { fontFamily: 'Arial', fontSize: '16px', color: '#ef4444' });
+    this.armorText = this.add.text(16, 76, 'Arm: Lv1', { fontFamily: 'Arial', fontSize: '16px', color: '#3b82f6' });
+    this.baseText = this.add.text(this.scale.width - 16, 36, 'Base: 100/100', {
+      fontFamily: 'Arial',
+      fontSize: '16px',
+      color: '#22d3ee'
+    }).setOrigin(1, 0);
     this.waveText = this.add.text(this.scale.width - 16, 16, 'Wave: 0', {
       fontFamily: 'Arial',
       fontSize: '16px',
@@ -212,7 +278,10 @@ class ArenaScene extends Phaser.Scene {
         maxHp: playerData.maxHp,
         isDead: playerData.isDead,
         coins: playerData.coins ?? 0,
-        weaponLevel: playerData.weaponLevel ?? 1,
+        isDead: playerData.isDead,
+        coins: playerData.coins ?? 0,
+        armorLevel: playerData.armorLevel ?? 1,
+        attackLevel: playerData.attackLevel ?? 1,
       };
       this.lastSentPosition = { x: sprite.x, y: sprite.y };
       this.updateHud();
@@ -297,11 +366,13 @@ class ArenaScene extends Phaser.Scene {
 
   updateHud() {
     if (!this.localState) return;
-    const { hp, maxHp, coins, weaponLevel } = this.localState;
+    const { hp, maxHp, coins, armorLevel, attackLevel } = this.localState;
     if (this.hpText) this.hpText.setText(`HP: ${hp}/${maxHp}`);
     if (this.coinText) this.coinText.setText(`Coins: ${coins ?? 0}`);
-    if (this.weaponText) this.weaponText.setText(`Weapon: Lv${weaponLevel ?? 1}`);
+    if (this.attackText) this.attackText.setText(`Atk: Lv${attackLevel ?? 1}`);
+    if (this.armorText) this.armorText.setText(`Arm: Lv${armorLevel ?? 1}`);
     if (this.waveText) this.waveText.setText(`Wave: ${state.wave}`);
+    if (this.baseText) this.baseText.setText(`Base: ${state.baseHp ?? 100}/${state.baseMaxHp ?? 100}`);
   }
 
   update() {
@@ -310,6 +381,7 @@ class ArenaScene extends Phaser.Scene {
       this.localPlayer.setVelocity(0, 0);
       return;
     }
+
     const direction = new Phaser.Math.Vector2(0, 0);
     if (this.keys.W.isDown) direction.y -= 1;
     if (this.keys.S.isDown) direction.y += 1;
@@ -317,7 +389,33 @@ class ArenaScene extends Phaser.Scene {
     if (this.keys.D.isDown) direction.x += 1;
 
     direction.normalize();
-    this.localPlayer.setVelocity(direction.x * this.speed, direction.y * this.speed);
+    const speed = 200;
+
+    // Compute intended new position
+    const deltaTime = 1 / 60; // Approximate
+    let nextX = this.localPlayer.x + direction.x * speed * deltaTime;
+    let nextY = this.localPlayer.y + direction.y * speed * deltaTime;
+
+    // Collision detection with walls
+    const playerRadius = 16; // Half of player sprite size
+    if (this.isInsideWall(nextX, nextY, playerRadius)) {
+      // Try X-only movement
+      if (!this.isInsideWall(nextX, this.localPlayer.y, playerRadius)) {
+        nextY = this.localPlayer.y;
+      }
+      // Try Y-only movement
+      else if (!this.isInsideWall(this.localPlayer.x, nextY, playerRadius)) {
+        nextX = this.localPlayer.x;
+      }
+      // Block both
+      else {
+        nextX = this.localPlayer.x;
+        nextY = this.localPlayer.y;
+      }
+    }
+
+    this.localPlayer.x = nextX;
+    this.localPlayer.y = nextY;
 
     const pointer = this.input.activePointer;
     if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE) && pointer) {
@@ -331,6 +429,23 @@ class ArenaScene extends Phaser.Scene {
     }
   }
 
+  isInsideWall(x, y, radius = 16) {
+    // Check if a circle at (x, y) with given radius overlaps any wall
+    for (const wall of LEVEL_WALLS) {
+      // AABB vs Circle collision
+      const closestX = Math.max(wall.x, Math.min(x, wall.x + wall.width));
+      const closestY = Math.max(wall.y, Math.min(y, wall.y + wall.height));
+      const distX = x - closestX;
+      const distY = y - closestY;
+      const distSq = distX * distX + distY * distY;
+
+      if (distSq < radius * radius) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   tryShoot(targetX, targetY) {
     const now = performance.now();
     if (now - state.lastShotAt < FIRE_COOLDOWN_MS) return;
@@ -342,7 +457,7 @@ class ArenaScene extends Phaser.Scene {
 
   showShopMessage(durationMs) {
     if (!this.shopText) return;
-    this.shopText.setText('Wave cleared! Spend your coins on the green pad.');
+    this.shopText.setText('Wave cleared! Upgrade Armor (Left) or Attack (Right).');
     this.shopText.setVisible(true);
     this.time.delayedCall(durationMs || 5000, () => {
       if (this.shopText) this.shopText.setVisible(false);
@@ -375,8 +490,16 @@ const updateLobbyUI = (roomState) => {
   });
   const readyBtn = qs('ready-btn');
   const startBtn = qs('start-btn');
-  if (readyBtn) readyBtn.textContent = state?.localReady ? 'Unready' : 'Ready';
-  if (startBtn) startBtn.disabled = !(state.isHost && roomState.players.some((p) => p.isReady));
+  const restartBtn = qs('restart-btn');
+  if (readyBtn) {
+    readyBtn.textContent = state?.localReady ? 'Unready' : 'Ready';
+    readyBtn.style.display = 'inline-block';
+  }
+  if (startBtn) {
+    startBtn.disabled = !(state.isHost && roomState.players.some((p) => p.isReady));
+    startBtn.style.display = 'inline-block';
+  }
+  if (restartBtn) restartBtn.style.display = 'none';
 };
 
 // --- Socket events ---
@@ -396,10 +519,13 @@ const wireSocket = () => {
     state.isHost = roomState.hostId === state.socket.id;
     state.running = roomState.running;
     state.wave = roomState.wave || 0;
+    state.baseHp = roomState.baseHp;
+    state.baseMaxHp = roomState.baseMaxHp;
     state.players.clear();
     roomState.players.forEach((p) => state.players.set(p.id, p));
     state.localReady = roomState.players.find((p) => p.id === state.socket.id)?.isReady || false;
     updateLobbyUI(roomState);
+    if (state.scene) state.scene.updateHud(); // Update HUD with new base HP
     if (!roomState.running && state.game) {
       // Back to lobby view
       if (state.scene) {
@@ -450,6 +576,12 @@ const wireSocket = () => {
     }
   });
 
+  socket.on('baseHpUpdated', ({ baseHp, baseMaxHp }) => {
+    state.baseHp = baseHp;
+    state.baseMaxHp = baseMaxHp;
+    if (state.scene) state.scene.updateHud();
+  });
+
   socket.on('enemiesUpdated', (enemies) => {
     if (!state.scene) return;
     const ids = new Set();
@@ -485,11 +617,13 @@ const wireSocket = () => {
       const player = state.players.get(u.id);
       if (player) {
         player.coins = u.coins;
-        player.weaponLevel = u.weaponLevel;
+        player.armorLevel = u.armorLevel;
+        player.attackLevel = u.attackLevel;
       }
       if (u.id === state.socket.id && state.scene?.localState) {
         state.scene.localState.coins = u.coins;
-        state.scene.localState.weaponLevel = u.weaponLevel;
+        state.scene.localState.armorLevel = u.armorLevel;
+        state.scene.localState.attackLevel = u.attackLevel;
         state.scene.updateHud();
       }
     });
@@ -505,7 +639,17 @@ const wireSocket = () => {
     state.wave = wave || state.wave;
     const status = qs('lobby-status');
     if (status) status.textContent = `Game over (${reason || 'ended'}) on wave ${state.wave}.`;
+
     showPanel('lobby-panel');
+    const startBtn = qs('start-btn');
+    const readyBtn = qs('ready-btn');
+    const restartBtn = qs('restart-btn');
+    if (startBtn) startBtn.style.display = 'none';
+    if (readyBtn) readyBtn.style.display = 'none';
+    if (restartBtn) {
+      restartBtn.style.display = state.isHost ? 'inline-block' : 'none';
+      if (!state.isHost && status) status.textContent += ' Waiting for host to restart...';
+    }
   });
 
   socket.on('errorMessage', ({ message }) => {
@@ -524,6 +668,10 @@ const startGame = () => {
       width: ARENA.width,
       height: ARENA.height,
       backgroundColor: GAME_COLORS.bg,
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
       scene: [ArenaScene],
       parent: 'game-container',
       physics: {
@@ -532,8 +680,6 @@ const startGame = () => {
       },
     };
     state.game = new Phaser.Game(config);
-  } else if (state.scene) {
-    state.scene.resetWorld();
   }
 };
 
@@ -547,6 +693,7 @@ const wireUi = () => {
   const joinBtn = qs('join-room-btn');
   const readyBtn = qs('ready-btn');
   const startBtn = qs('start-btn');
+  const restartBtn = qs('restart-btn');
 
   const getName = () => (nameInput?.value?.trim() ? nameInput.value.trim() : 'Hero');
 
@@ -574,6 +721,10 @@ const wireUi = () => {
 
   startBtn?.addEventListener('click', () => {
     state.socket.emit('startGame');
+  });
+
+  restartBtn?.addEventListener('click', () => {
+    state.socket.emit('requestRestartGame');
   });
 };
 
