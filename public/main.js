@@ -104,10 +104,11 @@ class ArenaScene extends Phaser.Scene {
     this.coinText = null;
     this.weaponText = null;
     this.deathText = null;
+    this.shopText = null;
     this.upgradePad = null;
   }
 
-  preload() {}
+  preload() { }
 
   create() {
     state.scene = this;
@@ -170,6 +171,12 @@ class ArenaScene extends Phaser.Scene {
       fontSize: '32px',
       color: '#ff4d4d',
     }).setOrigin(0.5).setVisible(false);
+
+    this.shopText = this.add.text(this.scale.width / 2, 40, '', {
+      fontFamily: 'Arial',
+      fontSize: '18px',
+      color: '#fbbf24',
+    }).setOrigin(0.5, 0).setVisible(false);
   }
 
   addPlayer(playerData, isLocal) {
@@ -315,6 +322,15 @@ class ArenaScene extends Phaser.Scene {
     state.socket.emit('playerShoot', dir);
     state.lastShotAt = now;
   }
+
+  showShopMessage(durationMs) {
+    if (!this.shopText) return;
+    this.shopText.setText('Wave cleared! Spend your coins on the green pad.');
+    this.shopText.setVisible(true);
+    this.time.delayedCall(durationMs || 5000, () => {
+      if (this.shopText) this.shopText.setVisible(false);
+    });
+  }
 }
 
 // --- UI helpers ---
@@ -407,6 +423,14 @@ const wireSocket = () => {
   socket.on('waveUpdated', ({ wave }) => {
     state.wave = wave || 0;
     if (state.scene) state.scene.updateHud();
+  });
+
+  socket.on('waveCleared', ({ wave, nextWaveInMs }) => {
+    state.wave = wave || state.wave;
+    if (state.scene) {
+      state.scene.updateHud();
+      state.scene.showShopMessage(nextWaveInMs || 5000);
+    }
   });
 
   socket.on('enemiesUpdated', (enemies) => {

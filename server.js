@@ -23,12 +23,12 @@ const PROJECTILE_DAMAGE_BASE = 5;
 const PROJECTILE_DAMAGE_PER_LEVEL = 2;
 const PROJECTILE_RANGE = 600;
 const PROJECTILE_HIT_DISTANCE = 20;
-const WAVE_INTERVAL_MS = 10000;
 const ENEMY_TICK_MS = 100;
 const ENEMY_DESPAWN_MS = 30000;
 const MAX_WAVE = 5;
 const UPGRADE_COST = 5;
 const MAX_WEAPON_LEVEL = 5;
+const SHOP_PHASE_MS = 5000;
 
 // --- State ---
 const rooms = new Map();
@@ -99,10 +99,11 @@ const createRoom = (roomId) => ({
   coins: new Map(),
   waveNumber: 0,
   running: false,
+  phase: 'lobby', // 'lobby' | 'combat' | 'shop'
   loops: {
-    waveIntervalId: null,
     enemyIntervalId: null,
     lastEnemyTick: Date.now(),
+    nextWaveTimeoutId: null,
   },
   upgradePad: {
     x: ARENA.width / 2,
@@ -150,12 +151,14 @@ const alivePlayers = (room) => Array.from(room.players.values()).filter((p) => !
 
 const handleGameOver = (room, reason) => {
   room.running = false;
-  clearInterval(room.loops.waveIntervalId);
+  room.running = false;
   clearInterval(room.loops.enemyIntervalId);
-  room.loops.waveIntervalId = null;
+  if (room.loops.nextWaveTimeoutId) clearTimeout(room.loops.nextWaveTimeoutId);
   room.loops.enemyIntervalId = null;
+  room.loops.nextWaveTimeoutId = null;
   io.to(room.id).emit('gameOver', { wave: room.waveNumber, reason });
   // Reset for lobby
+  room.phase = 'lobby';
   room.waveNumber = 0;
   room.enemies.clear();
   room.projectiles.clear();
@@ -237,7 +240,7 @@ const applyEnemyDamageToPlayers = (room) => {
 };
 
 const moveEnemies = (room) => {
-  if (!room.running) return;
+  if (!room.running || room.phase !== 'combat') return;
   const now = Date.now();
   const deltaSeconds = Math.max((now - room.loops.lastEnemyTick) / 1000, 0);
   room.loops.lastEnemyTick = now;
@@ -367,9 +370,26 @@ const applyUpgradePad = (room) => {
   if (updates.length > 0) io.to(room.id).emit('playerStatsUpdated', updates);
 };
 
+const startShopPhase = (room) => {
+  room.phase = 'shop';
+  io.to(room.id).emit('waveCleared', {
+    wave: room.waveNumber,
+    nextWaveInMs: SHOP_PHASE_MS,
+    maxWave: MAX_WAVE,
+  });
+
+  if (room.loops.nextWaveTimeoutId) clearTimeout(room.loops.nextWaveTimeoutId);
+  room.loops.nextWaveTimeoutId = setTimeout(() => {
+    if (!room.running) return;
+    room.phase = 'combat';
+    spawnEnemyWave(room);
+  }, SHOP_PHASE_MS);
+};
+
 const startRoomLoops = (room) => {
   if (room.running) return;
   room.running = true;
+  room.phase = 'combat';
   room.waveNumber = 0;
   room.enemies.clear();
   room.projectiles.clear();
@@ -387,7 +407,7 @@ const startRoomLoops = (room) => {
   });
   room.loops.lastEnemyTick = Date.now();
   spawnEnemyWave(room);
-  room.loops.waveIntervalId = setInterval(() => spawnEnemyWave(room), WAVE_INTERVAL_MS);
+  // room.loops.waveIntervalId = setInterval(() => spawnEnemyWave(room), WAVE_INTERVAL_MS);
   room.loops.enemyIntervalId = setInterval(() => {
     moveEnemies(room);
     moveProjectiles(room);
@@ -395,8 +415,14 @@ const startRoomLoops = (room) => {
     applyUpgradePad(room);
     const alive = alivePlayers(room);
     if (alive.length === 0) handleGameOver(room, 'all-dead');
-    if (room.waveNumber >= MAX_WAVE && room.enemies.size === 0) {
-      handleGameOver(room, 'waves-cleared');
+
+    // Check for wave clear
+    if (room.phase === 'combat' && room.enemies.size === 0) {
+      if (room.waveNumber >= MAX_WAVE) {
+        handleGameOver(room, 'waves-cleared');
+      } else {
+        startShopPhase(room);
+      }
     }
   }, ENEMY_TICK_MS);
   io.to(room.id).emit('currentPlayers', Array.from(room.players.values()));
@@ -405,10 +431,10 @@ const startRoomLoops = (room) => {
 };
 
 const stopRoomLoops = (room) => {
-  clearInterval(room.loops.waveIntervalId);
   clearInterval(room.loops.enemyIntervalId);
-  room.loops.waveIntervalId = null;
+  if (room.loops.nextWaveTimeoutId) clearTimeout(room.loops.nextWaveTimeoutId);
   room.loops.enemyIntervalId = null;
+  room.loops.nextWaveTimeoutId = null;
   room.running = false;
 };
 
