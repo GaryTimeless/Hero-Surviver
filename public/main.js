@@ -14,6 +14,8 @@ const GAME_COLORS = {
   enemy: ['#22c55e', '#38bdf8', '#f97316', '#c084fc', '#f59e0b'],
 };
 
+const FIRE_COOLDOWN_MS = 250;
+
 const UI = {};
 
 const state = {
@@ -470,7 +472,15 @@ class ArenaScene extends Phaser.Scene {
     const now = performance.now();
     if (now - state.lastShotAt < FIRE_COOLDOWN_MS) return;
     if (!this.localPlayer) return;
-    const dir = { x: targetX - this.localPlayer.x, y: targetY - this.localPlayer.y };
+
+    const dx = targetX - this.localPlayer.x;
+    const dy = targetY - this.localPlayer.y;
+    const len = Math.hypot(dx, dy);
+
+    // Prevent shooting if cursor is exactly on player (zero length vector)
+    if (len < 1) return;
+
+    const dir = { x: dx, y: dy };
     state.socket.emit('playerShoot', dir);
     state.lastShotAt = now;
   }

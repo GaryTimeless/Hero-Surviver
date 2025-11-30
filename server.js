@@ -11,6 +11,11 @@ const PORT = process.env.PORT || 3000;
 // Serve static client files
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Serve map editor
+app.get('/mapeditor', (req, res) => {
+  res.sendFile(path.join(__dirname, 'mapeditor.html'));
+});
+
 // --- Constants ---
 // --- Constants ---
 const levelConfig = require(path.join(__dirname, 'public', 'config', 'level.json'));
@@ -154,7 +159,8 @@ const constrainToLane = (x, y) => {
 };
 
 const createProjectile = (player, dir) => {
-  const len = Math.hypot(dir.x, dir.y) || 1;
+  const len = Math.hypot(dir.x, dir.y);
+  if (len === 0) return null;
   const norm = { x: dir.x / len, y: dir.y / len };
   return {
     id: `proj-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -828,6 +834,7 @@ io.on('connection', (socket) => {
     const dir = data && typeof data === 'object' ? data : null;
     if (!dir || typeof dir.x !== 'number' || typeof dir.y !== 'number') return;
     const proj = createProjectile(player, dir);
+    if (!proj) return;
     room.projectiles.set(proj.id, proj);
     emitProjectiles(room);
   });

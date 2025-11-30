@@ -78,6 +78,10 @@
     <button id="deleteBtn" disabled>Delete Selected Wall</button>
     <button id="duplicateBtn" disabled>Duplicate Selected</button>
     <button id="exportBtn">Export JSON</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="importBtn">Import JSON</button>
+    <button id="loadFileBtn">Load File</button>
+    <input type="file" id="fileInput" accept=".json" style="display: none;" />
     <button id="copyBtn">Copy JSON Text</button>
     <button id="addSpawnBtn">Add Spawn</button>
     <button id="deleteSpawnBtn" disabled>Delete Spawn</button>
@@ -113,37 +117,28 @@
 
     // ---------- DATA STRUCTURES ----------
 
-    // Start walls – just an example layout, you can change/move/delete all of them.
-    let walls = [
+    // Start walls – will be loaded from level.json
+    let walls = [];
+
+    // Shop pads & base (circles)
+    let armorPad = { x: 0, y: 0, radius: 40 };
+    let attackPad = { x: 0, y: 0, radius: 40 };
+    let base = { x: 0, y: 0, radius: 34 };
+    let playerSpawns = [];
+
+    // Initialize with defaults if needed, or just wait for load
+    // For now, we start empty or with a basic setup so it's not blank
+    walls = [
       { x: 100, y: 80, width: 1400, height: 40 },
       { x: 100, y: 80, width: 40, height: 740 },
       { x: 1460, y: 80, width: 40, height: 740 },
       { x: 300, y: 280, width: 1000, height: 40 },
       { x: 300, y: 580, width: 1000, height: 40 },
     ];
-
-    // Shop pads & base (circles)
-    let armorPad = {
-      x: canvas.width / 2 - 200,
-      y: canvas.height - 140,
-      radius: 40
-    };
-
-    let attackPad = {
-      x: canvas.width / 2 + 200,
-      y: canvas.height - 140,
-      radius: 40
-    };
-
-    let base = {
-      x: canvas.width / 2,
-      y: canvas.height - 60,
-      radius: 34
-    };
-
-    let playerSpawns = [
-      { id: 'SP1', x: canvas.width / 2, y: canvas.height / 2 }
-    ];
+    base = { x: canvas.width / 2, y: canvas.height - 60, radius: 34 };
+    armorPad = { x: canvas.width / 2 - 200, y: canvas.height - 140, radius: 40 };
+    attackPad = { x: canvas.width / 2 + 200, y: canvas.height - 140, radius: 40 };
+    playerSpawns = [{ id: 'SP1', x: canvas.width / 2, y: canvas.height / 2 }];
 
     // Selection state
     let selectedType = null; // "wall" | "armor" | "attack" | "base" | "spawn"
@@ -451,6 +446,18 @@
         target.x = newX;
         target.y = newY;
         draw();
+      } else if (dragMode === 'moveSpawn' && selectedType === 'spawn' && selectedIndex !== -1) {
+        const s = playerSpawns[selectedIndex];
+        let newX = x - dragOffsetX;
+        let newY = y - dragOffsetY;
+
+        // clamp to canvas
+        newX = Math.max(0, Math.min(canvas.width, newX));
+        newY = Math.max(0, Math.min(canvas.height, newY));
+
+        s.x = newX;
+        s.y = newY;
+        draw();
       }
     });
 
@@ -527,6 +534,33 @@
       selectedIndex = playerSpawns.length - 1;
       draw();
     });
+    function drawSpawn(spawn, index, isSelected) {
+      const size = 18; // Länge der X-Arme
+      const { x, y } = spawn;
+
+      ctx.save();
+
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.strokeStyle = isSelected ? "#ffffff" : "#facc15"; // weiß wenn ausgewählt, sonst gelb
+
+      // X zeichnen
+      ctx.beginPath();
+      ctx.moveTo(x - size, y - size);
+      ctx.lineTo(x + size, y + size);
+      ctx.moveTo(x + size, y - size);
+      ctx.lineTo(x - size, y + size);
+      ctx.stroke();
+
+      // Label "P1", "P2", ...
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = "12px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const label = `P${index + 1}`;
+      ctx.fillText(label, x, y + size + 4);
+
+      ctx.restore();
+    }
 
     function deleteSelectedSpawn() {
       if (selectedType === 'spawn' && selectedIndex !== -1) {
@@ -637,6 +671,66 @@
     }
 
     exportBtn.addEventListener("click", exportJSON);
+
+    const importBtn = document.getElementById("importBtn");
+    importBtn.addEventListener("click", importJSON);
+
+    function importJSON() {
+      try {
+        const json = exportBox.value;
+        if (!json.trim()) {
+          alert("Please paste JSON data into the text area first.");
+          return;
+        }
+        processLoadedData(json);
+      } catch (e) {
+        console.error("Import error:", e);
+        alert("Invalid JSON. Check console for details.");
+      }
+    }
+
+    // File Loading Logic
+    const loadFileBtn = document.getElementById("loadFileBtn");
+    const fileInput = document.getElementById("fileInput");
+
+    loadFileBtn.addEventListener("click", () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          processLoadedData(event.target.result);
+        } catch (err) {
+          console.error("File load error:", err);
+          alert("Error parsing file JSON.");
+        }
+      };
+      reader.readAsText(file);
+      // Reset value so same file can be selected again if needed
+      fileInput.value = '';
+    });
+
+    function processLoadedData(jsonString) {
+      const data = JSON.parse(jsonString);
+
+      if (data.walls) walls = data.walls;
+      if (data.base) base = data.base;
+      if (data.armorPad) armorPad = data.armorPad;
+      if (data.attackPad) attackPad = data.attackPad;
+      if (data.playerSpawns) playerSpawns = data.playerSpawns;
+
+      // Update export box to show what we just loaded
+      exportBox.value = JSON.stringify(data, null, 2);
+
+      console.log("Loaded data:", data);
+      draw();
+      alert("Level loaded successfully!");
+    }
 
     window.addEventListener("keydown", (e) => {
       const key = e.key.toLowerCase();
