@@ -85,6 +85,9 @@
     <button id="copyBtn">Copy JSON Text</button>
     <button id="addSpawnBtn">Add Spawn</button>
     <button id="deleteSpawnBtn" disabled>Delete Spawn</button>
+    <button id="addLeftPathNodeBtn">Add Left Path Node</button>
+    <button id="addRightPathNodeBtn">Add Right Path Node</button>
+    <button id="deletePathNodeBtn" disabled>Delete Path Node</button>
     <span id="info">
       Click to select. Drag to move. Drag small square (bottom-right) to resize walls.
       Armor/Attack/Base are draggable circles. <b>Del/Backspace</b> deletes selected wall.
@@ -108,6 +111,9 @@
     const exportBtn = document.getElementById("exportBtn");
     const addSpawnBtn = document.getElementById("addSpawnBtn");
     const deleteSpawnBtn = document.getElementById("deleteSpawnBtn");
+    const addLeftPathNodeBtn = document.getElementById("addLeftPathNodeBtn");
+    const addRightPathNodeBtn = document.getElementById("addRightPathNodeBtn");
+    const deletePathNodeBtn = document.getElementById("deletePathNodeBtn");
     const exportBox = document.getElementById("export");
 
     const HANDLE_SIZE = 12;
@@ -125,6 +131,10 @@
     let attackPad = { x: 0, y: 0, radius: 40 };
     let base = { x: 0, y: 0, radius: 34 };
     let playerSpawns = [];
+    let enemyPaths = {
+      left: [],
+      right: [],
+    };
 
     // Initialize with defaults if needed, or just wait for load
     // For now, we start empty or with a basic setup so it's not blank
@@ -209,10 +219,49 @@
         drawSpawn(spawn, i, isSelected);
       });
 
+      drawPathNodes(enemyPaths.left, 'left', selectedType === 'enemyPathLeft' ? selectedIndex : -1);
+      drawPathNodes(enemyPaths.right, 'right', selectedType === 'enemyPathRight' ? selectedIndex : -1);
+
       const noWallSelected = !(selectedType === "wall" && selectedIndex !== -1);
       deleteBtn.disabled = noWallSelected;
       duplicateBtn.disabled = noWallSelected;
       deleteSpawnBtn.disabled = !(selectedType === 'spawn' && selectedIndex !== -1);
+      deletePathNodeBtn.disabled = !(
+        (selectedType === 'enemyPathLeft' && selectedIndex !== -1) ||
+        (selectedType === 'enemyPathRight' && selectedIndex !== -1)
+      );
+    }
+
+    function drawPathNodes(nodes, type, selectedIndex) {
+      if (!nodes || nodes.length === 0) return;
+
+      // Draw connecting lines
+      ctx.save();
+      ctx.strokeStyle = type === 'left' ? '#38bdf8' : '#f97316'; // cyan vs orange
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(nodes[0].x, nodes[0].y);
+      for (let i = 1; i < nodes.length; i++) {
+        ctx.lineTo(nodes[i].x, nodes[i].y);
+      }
+      ctx.stroke();
+
+      // Draw individual nodes
+      nodes.forEach((node, i) => {
+        const isSelected = (selectedIndex === i);
+
+        const radius = isSelected ? 8 : 6;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fillStyle = type === 'left' ? 'rgba(56, 189, 248, 0.8)' : 'rgba(249, 115, 22, 0.8)';
+        ctx.fill();
+        ctx.lineWidth = isSelected ? 3 : 1.5;
+        ctx.strokeStyle = isSelected ? '#ffffff' : '#0f172a';
+        ctx.stroke();
+      });
+
+      ctx.restore();
     }
 
     function drawGrid() {
@@ -324,6 +373,18 @@
       return -1;
     }
 
+    function hitTestPathNode(nodes, x, y) {
+      const radius = 10;
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const dx = x - nodes[i].x;
+        const dy = y - nodes[i].y;
+        if (dx * dx + dy * dy <= radius * radius) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
     // ---------- MOUSE EVENTS ----------
 
     canvas.addEventListener("mousedown", (e) => {
@@ -340,6 +401,29 @@
         const s = playerSpawns[spawnIdx];
         dragOffsetX = x - s.x;
         dragOffsetY = y - s.y;
+        draw();
+        return;
+      }
+
+      // Path nodes - right first, then left
+      let pIdx = hitTestPathNode(enemyPaths.right, x, y);
+      if (pIdx !== -1) {
+        selectedType = 'enemyPathRight';
+        selectedIndex = pIdx;
+        dragMode = 'movePathNode';
+        dragOffsetX = x - enemyPaths.right[pIdx].x;
+        dragOffsetY = y - enemyPaths.right[pIdx].y;
+        draw();
+        return;
+      }
+
+      pIdx = hitTestPathNode(enemyPaths.left, x, y);
+      if (pIdx !== -1) {
+        selectedType = 'enemyPathLeft';
+        selectedIndex = pIdx;
+        dragMode = 'movePathNode';
+        dragOffsetX = x - enemyPaths.left[pIdx].x;
+        dragOffsetY = y - enemyPaths.left[pIdx].y;
         draw();
         return;
       }
@@ -457,6 +541,19 @@
 
         s.x = newX;
         s.y = newY;
+        draw();
+      } else if (dragMode === 'movePathNode' && selectedIndex !== -1) {
+        let arr = null;
+        if (selectedType === 'enemyPathLeft') arr = enemyPaths.left;
+        if (selectedType === 'enemyPathRight') arr = enemyPaths.right;
+        if (!arr) return;
+
+        let newX = x - dragOffsetX;
+        let newY = y - dragOffsetY;
+        newX = Math.max(0, Math.min(canvas.width, newX));
+        newY = Math.max(0, Math.min(canvas.height, newY));
+        arr[selectedIndex].x = newX;
+        arr[selectedIndex].y = newY;
         draw();
       }
     });
@@ -577,6 +674,46 @@
 
     deleteSpawnBtn.addEventListener('click', deleteSelectedSpawn);
 
+    addLeftPathNodeBtn.addEventListener('click', () => {
+      const newNode = {
+        x: canvas.width / 2 - 200,
+        y: canvas.height / 2,
+      };
+      enemyPaths.left.push(newNode);
+      selectedType = 'enemyPathLeft';
+      selectedIndex = enemyPaths.left.length - 1;
+      draw();
+    });
+
+    addRightPathNodeBtn.addEventListener('click', () => {
+      const newNode = {
+        x: canvas.width / 2 + 200,
+        y: canvas.height / 2,
+      };
+      enemyPaths.right.push(newNode);
+      selectedType = 'enemyPathRight';
+      selectedIndex = enemyPaths.right.length - 1;
+      draw();
+    });
+
+    function deleteSelectedPathNode() {
+      let arr = null;
+      if (selectedType === 'enemyPathLeft') arr = enemyPaths.left;
+      if (selectedType === 'enemyPathRight') arr = enemyPaths.right;
+      if (!arr || selectedIndex === -1) return;
+
+      arr.splice(selectedIndex, 1);
+      if (arr.length === 0) {
+        selectedType = null;
+        selectedIndex = -1;
+      } else {
+        selectedIndex = Math.min(selectedIndex, arr.length - 1);
+      }
+      draw();
+    }
+
+    deletePathNodeBtn.addEventListener('click', deleteSelectedPathNode);
+
     function deleteSelectedWall() {
       if (selectedType === "wall" && selectedIndex !== -1) {
         walls.splice(selectedIndex, 1);
@@ -663,6 +800,7 @@
         attackPad,
         base,
         playerSpawns,
+        enemyPaths,
       };
       const json = JSON.stringify(data, null, 2);
       exportBox.value = json;
@@ -723,6 +861,12 @@
       if (data.armorPad) armorPad = data.armorPad;
       if (data.attackPad) attackPad = data.attackPad;
       if (data.playerSpawns) playerSpawns = data.playerSpawns;
+      if (data.enemyPaths) {
+        enemyPaths = data.enemyPaths;
+        // ensure structure
+        if (!enemyPaths.left) enemyPaths.left = [];
+        if (!enemyPaths.right) enemyPaths.right = [];
+      }
 
       // Update export box to show what we just loaded
       exportBox.value = JSON.stringify(data, null, 2);
@@ -741,6 +885,7 @@
         e.preventDefault();
         if (selectedType === "wall") deleteSelectedWall();
         if (selectedType === "spawn") deleteSelectedSpawn();
+        if (selectedType === 'enemyPathLeft' || selectedType === 'enemyPathRight') deleteSelectedPathNode();
       }
     });
 

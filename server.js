@@ -49,25 +49,11 @@ const BASE = {
   maxHp: 100,
 };
 
-// Left path (spawn -> left lane -> base)
-const PATH_LEFT = [
-  { x: ARENA.width / 2, y: 150 },      // Below gate
-  { x: 350, y: 200 },                   // Entering left lane
-  { x: 200, y: 350 },                   // Left vertical descent
-  { x: 200, y: 650 },                   // Bottom of left side
-  { x: ARENA.width / 2 - 100, y: 750 }, // Approaching base from left
-];
+// Enemy Paths from config
+const PATH_LEFT = (levelConfig.enemyPaths && levelConfig.enemyPaths.left) || [];
+const PATH_RIGHT = (levelConfig.enemyPaths && levelConfig.enemyPaths.right) || [];
 
-// Right path (spawn -> right lane -> base)
-const PATH_RIGHT = [
-  { x: ARENA.width / 2, y: 150 },       // Below gate
-  { x: 1250, y: 200 },                  // Entering right lane
-  { x: 1400, y: 350 },                  // Right vertical descent
-  { x: 1400, y: 650 },                  // Bottom of right side
-  { x: ARENA.width / 2 + 100, y: 750 }, // Approaching base from right
-];
-
-const ENEMY_DETECT_PLAYER_RADIUS = 200;
+const ENEMY_VISION_RADIUS = 200; // New constant for enemy vision
 const ENEMY_LOSE_PLAYER_RADIUS = 260;
 const ENEMY_BASE_CONTACT_DISTANCE = 40;
 const BASE_DAMAGE_PER_TICK = 3;
@@ -284,15 +270,34 @@ const spawnEnemyWave = (room) => {
   for (let i = 0; i < count; i += 1) {
     const enemy = createEnemy(room.waveNumber);
 
-    // Assign path: alternate left/right
+    const leftPath = PATH_LEFT;
+    const rightPath = PATH_RIGHT;
+
+    // Alternate: left/right
     const useLeft = room.enemySpawnCount % 2 === 0;
     room.enemySpawnCount++;
-    enemy.pathNodes = useLeft ? PATH_LEFT : PATH_RIGHT;
 
-    // Override random position with gate position
-    const offsetX = (Math.random() - 0.5) * GATE.spread;
-    enemy.x = GATE.x + offsetX;
-    enemy.y = GATE.y;
+    enemy.pathNodes = useLeft ? leftPath : rightPath;
+
+    // Start position: first path node, or fallback to gate if no nodes
+    const nodes = enemy.pathNodes;
+    if (nodes && nodes.length > 0) {
+      enemy.x = nodes[0].x;
+      enemy.y = nodes[0].y;
+    } else {
+      const offsetX = (Math.random() - 0.5) * GATE.spread;
+      enemy.x = GATE.x + offsetX;
+      enemy.y = GATE.y;
+    }
+
+    enemy.mode = 'path';
+    enemy.pathIndex = 0; // Start at first node (already there, so will move to next)
+
+    // If we spawn exactly at node 0, we should probably target node 1 immediately
+    // But the movement logic handles "close enough to node" check, so it's fine.
+    // Actually, if we spawn AT node 0, we should target node 1.
+    // Let's just let the loop handle it.
+
     room.enemies.set(enemy.id, enemy);
   }
   emitEnemies(room);
@@ -398,53 +403,57 @@ const moveEnemies = (room) => {
   const deltaSeconds = (now - room.loops.lastEnemyTick) / 1000;
   room.loops.lastEnemyTick = now;
 
-  const alive = alivePlayers(room);
-  const attackingEnemies = [];
+  const enemiesToRemove = [];
 
   room.enemies.forEach((enemy) => {
-    // 1. Detection: Check for nearby players to chase
-    let closestPlayer = null;
-    let closestDistSq = Infinity;
-    alive.forEach((player) => {
-      const dx = player.x - enemy.x;
-      const dy = player.y - enemy.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < closestDistSq) {
-        closestDistSq = distSq;
-        closestPlayer = player;
-      }
-    });
+    if (enemy.isDead) return;
 
-    if (closestPlayer && closestDistSq <= ENEMY_DETECT_PLAYER_RADIUS * ENEMY_DETECT_PLAYER_RADIUS) {
-      enemy.mode = 'chase';
-      enemy.chaseTargetId = closestPlayer.id;
-    }
-
-    // 2. State Machine
     let targetX = enemy.x;
     let targetY = enemy.y;
     let move = true;
 
+    // State Machine
     switch (enemy.mode) {
-      case 'path': {
-        if (!enemy.pathNodes || enemy.pathIndex >= enemy.pathNodes.length) {
-          enemy.mode = 'goal';
-          break;
-        }
-        const node = enemy.pathNodes[enemy.pathIndex];
-        targetX = node.x;
-        targetY = node.y;
-        const dx = targetX - enemy.x;
-        const dy = targetY - enemy.y;
-        const distSq = dx * dx + dy * dy;
-        if (distSq < 100) { // Reached node
-          enemy.pathIndex++;
-          if (enemy.pathIndex >= enemy.pathNodes.length) {
-            enemy.mode = 'goal';
+      case 'path':
+        if (enemy.pathNodes && enemy.pathIndex < enemy.pathNodes.length) {
+          const node = enemy.pathNodes[enemy.pathIndex];
+          targetX = node.x;
+          targetY = node.y;
+          const distSq = (targetX - enemy.x) ** 2 + (targetY - enemy.y) ** 2;
+          if (distSq < 100) { // reached node
+            enemy.pathIndex++;
+            if (enemy.pathIndex >= enemy.pathNodes.length) {
+              enemy.mode = 'goal';
+            }
           }
+        } else {
+          enemy.mode = 'goal';
+        }
+        break;
+
+      case 'chase': {
+        // Find closest player
+        let closest = null;
+        let minDistSq = Infinity;
+        for (const p of room.players.values()) {
+          if (p.isDead) continue;
+          const d2 = (p.x - enemy.x) ** 2 + (p.y - enemy.y) ** 2;
+          if (d2 < minDistSq) {
+            minDistSq = d2;
+            closest = p;
+          }
+        }
+        if (closest && minDistSq < ENEMY_VISION_RADIUS * ENEMY_VISION_RADIUS) {
+          targetX = closest.x;
+          targetY = closest.y;
+        } else {
+          // Lost target -> go back to path or goal
+          const hasPath = enemy.pathNodes && enemy.pathNodes.length > 0;
+          enemy.mode = hasPath && enemy.pathIndex < enemy.pathNodes.length ? 'path' : 'goal';
         }
         break;
       }
+
       case 'goal': {
         targetX = BASE.x;
         targetY = BASE.y;
@@ -452,54 +461,67 @@ const moveEnemies = (room) => {
         const dy = targetY - enemy.y;
         const distSq = dx * dx + dy * dy;
         if (distSq <= ENEMY_BASE_CONTACT_DISTANCE * ENEMY_BASE_CONTACT_DISTANCE) {
-          enemy.mode = 'attackBase';
-          move = false;
-        }
-        break;
-      }
-      case 'chase': {
-        const target = room.players.get(enemy.chaseTargetId);
-        if (!target || target.isDead) {
-          // Target lost/dead, return to path/goal
-          enemy.mode = enemy.pathIndex < PATH_LEFT.length ? 'path' : 'goal'; // Assuming PATH_LEFT is representative
-          enemy.chaseTargetId = null;
-        } else {
-          const dx = target.x - enemy.x;
-          const dy = target.y - enemy.y;
-          const distSq = dx * dx + dy * dy;
-          if (distSq > ENEMY_LOSE_PLAYER_RADIUS * ENEMY_LOSE_PLAYER_RADIUS) {
-            // Target too far, return to path/goal
-            enemy.mode = enemy.pathIndex < PATH_LEFT.length ? 'path' : 'goal'; // Assuming PATH_LEFT is representative
-            enemy.chaseTargetId = null;
-          } else {
-            targetX = target.x;
-            targetY = target.y;
+          // One-shot base damage
+          const oldHp = room.baseHp;
+          room.baseHp = Math.max(0, room.baseHp - BASE_DAMAGE_PER_TICK);
+
+          if (room.baseHp !== oldHp) {
+            io.to(room.id).emit('baseHpUpdated', {
+              baseHp: room.baseHp,
+              baseMaxHp: room.baseMaxHp,
+            });
           }
+
+          // Mark enemy for removal
+          enemiesToRemove.push(enemy.id);
+          move = false; // no further movement this tick
         }
         break;
       }
-      case 'attackBase': {
-        move = false;
-        attackingEnemies.push(enemy);
-        break;
+
+      // 'attackBase' is no longer used
+    }
+
+    // Check for players to chase (override path/goal)
+    if (enemy.mode !== 'chase' && enemy.mode !== 'goal') { // Don't switch to chase if attacking base (though goal now removes enemy)
+      // Actually, if in 'goal' mode (heading to base), we might still want to chase?
+      // The prompt says: "enemies have a mode state machine (path, goal, chase, attackBase)"
+      // And "when they reach the base, they switch to attackBase" -> changed to "sacrifice"
+      // Let's keep the chase logic simple: if close to player, chase.
+      // But maybe not if they are very close to base?
+      // For now, let's keep existing logic but update the "return to path" part
+
+      let closest = null;
+      let minDistSq = Infinity;
+      for (const p of room.players.values()) {
+        if (p.isDead) continue;
+        const d2 = (p.x - enemy.x) ** 2 + (p.y - enemy.y) ** 2;
+        if (d2 < minDistSq) {
+          minDistSq = d2;
+          closest = p;
+        }
+      }
+      if (closest && minDistSq < ENEMY_VISION_RADIUS * ENEMY_VISION_RADIUS) {
+        enemy.mode = 'chase';
       }
     }
 
-    // 3. Movement
     if (move) {
       const dx = targetX - enemy.x;
       const dy = targetY - enemy.y;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len > 0) {
-        const dirX = dx / len;
-        const dirY = dy / len;
-        let nextX = enemy.x + dirX * ENEMY_SPEED * deltaSeconds;
-        let nextY = enemy.y + dirY * ENEMY_SPEED * deltaSeconds;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1) {
+        let nextX = enemy.x + (dx / dist) * ENEMY_SPEED * deltaSeconds;
+        let nextY = enemy.y + (dy / dist) * ENEMY_SPEED * deltaSeconds;
 
         // Apply lane constraints
         const constrained = constrainToLane(nextX, nextY);
         enemy.x = constrained.x;
         enemy.y = constrained.y;
+      } else {
+        // If very close to target, snap to target to avoid jitter
+        enemy.x = targetX;
+        enemy.y = targetY;
       }
     } else {
       // Even if not moving, ensure position is valid
@@ -509,27 +531,17 @@ const moveEnemies = (room) => {
     }
   });
 
-  // 4. Base Damage
-  if (attackingEnemies.length > 0) {
-    const totalDamage = BASE_DAMAGE_PER_TICK * attackingEnemies.length;
-    const oldHp = room.baseHp;
-    room.baseHp = Math.max(0, room.baseHp - totalDamage);
+  // Remove sacrificed enemies
+  enemiesToRemove.forEach((id) => {
+    room.enemies.delete(id);
+  });
 
-    // Emit base HP update if it changed
-    if (room.baseHp !== oldHp) {
-      io.to(room.id).emit('baseHpUpdated', {
-        baseHp: room.baseHp,
-        baseMaxHp: room.baseMaxHp
-      });
-    }
-  }
+  applyEnemyDamageToPlayers(room);
 
   if (room.baseHp === 0) {
     handleGameOver(room, 'base-destroyed');
     return;
   }
-
-  applyEnemyDamageToPlayers(room);
   emitEnemies(room);
 };
 
