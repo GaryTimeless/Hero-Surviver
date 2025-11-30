@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Lane & Shop Editor</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px;
+      gap: 8px;
+    }
+
+    #toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: center;
+      max-width: 1600px;
+    }
+
+    button {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: none;
+      background: #2563eb;
+      color: #e5e7eb;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    #info {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    #export {
+      width: 1600px;
+      height: 140px;
+      background: #020617;
+      color: #e5e7eb;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      padding: 8px;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+
+    canvas {
+      border-radius: 8px;
+      border: 1px solid #1f2937;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+      background: #020617;
+      cursor: default;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="toolbar">
+    <button id="addBtn">Add Wall</button>
+    <button id="deleteBtn" disabled>Delete Selected Wall</button>
+    <button id="duplicateBtn" disabled>Duplicate Selected</button>
+    <button id="exportBtn">Export JSON</button>
+    <button id="copyBtn">Copy JSON Text</button>
+    <button id="addSpawnBtn">Add Spawn</button>
+    <button id="deleteSpawnBtn" disabled>Delete Spawn</button>
+    <span id="info">
+      Click to select. Drag to move. Drag small square (bottom-right) to resize walls.
+      Armor/Attack/Base are draggable circles. <b>Del/Backspace</b> deletes selected wall.
+      Press <b>P</b> to export to console.
+    </span>
+  </div>
+
+  <!-- 1600x900 = ARENA size -->
+  <canvas id="editor" width="1600" height="900"></canvas>
+
+  <textarea id="export" readonly placeholder="Exported JSON will appear here..."></textarea>
+
+  <script>
+    const canvas = document.getElementById("editor");
+    const ctx = canvas.getContext("2d");
+
+    const addBtn = document.getElementById("addBtn");
+    const deleteBtn = document.getElementById("deleteBtn");
+    const duplicateBtn = document.getElementById("duplicateBtn");
+    const copyBtn = document.getElementById("copyBtn");
+    const exportBtn = document.getElementById("exportBtn");
+    const addSpawnBtn = document.getElementById("addSpawnBtn");
+    const deleteSpawnBtn = document.getElementById("deleteSpawnBtn");
+    const exportBox = document.getElementById("export");
+
+    const HANDLE_SIZE = 12;
+    const GRID_SIZE = 40;
+    const COPY_BUTTON_DEFAULT = "Copy JSON Text";
+    let copyBtnResetTimeout = null;
+
+    // ---------- DATA STRUCTURES ----------
+
+    // Start walls – just an example layout, you can change/move/delete all of them.
+    let walls = [
+      { x: 100, y: 80, width: 1400, height: 40 },
+      { x: 100, y: 80, width: 40, height: 740 },
+      { x: 1460, y: 80, width: 40, height: 740 },
+      { x: 300, y: 280, width: 1000, height: 40 },
+      { x: 300, y: 580, width: 1000, height: 40 },
+    ];
+
+    // Shop pads & base (circles)
+    let armorPad = {
+      x: canvas.width / 2 - 200,
+      y: canvas.height - 140,
+      radius: 40
+    };
+
+    let attackPad = {
+      x: canvas.width / 2 + 200,
+      y: canvas.height - 140,
+      radius: 40
+    };
+
+    let base = {
+      x: canvas.width / 2,
+      y: canvas.height - 60,
+      radius: 34
+    };
+
+    let playerSpawns = [
+      { id: 'SP1', x: canvas.width / 2, y: canvas.height / 2 }
+    ];
+
+    // Selection state
+    let selectedType = null; // "wall" | "armor" | "attack" | "base" | "spawn"
+    let selectedIndex = -1;  // only for walls
+    let dragMode = null;     // "moveWall" | "resizeWall" | "moveCircle"
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    // ---------- DRAW ----------
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Background
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const gradient = ctx.createRadialGradient(
+        canvas.width / 2,
+        canvas.height / 2,
+        200,
+        canvas.width / 2,
+        canvas.height / 2,
+        900
+      );
+      gradient.addColorStop(0, "#020617");
+      gradient.addColorStop(1, "#000000");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawGrid();
+
+      // Walls
+      walls.forEach((w, i) => {
+        const isSelected = selectedType === "wall" && selectedIndex === i;
+
+        ctx.fillStyle = isSelected ? "#60a5fa" : "#38bdf8";
+        ctx.globalAlpha = 0.9;
+        ctx.fillRect(w.x, w.y, w.width, w.height);
+        ctx.globalAlpha = 1;
+
+        ctx.strokeStyle = isSelected ? "#ffffff" : "#0f172a";
+        ctx.lineWidth = isSelected ? 3 : 1;
+        ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.width, w.height);
+
+        if (isSelected) {
+          // resize handle
+          ctx.fillStyle = "#f97316";
+          ctx.fillRect(
+            w.x + w.width - HANDLE_SIZE,
+            w.y + w.height - HANDLE_SIZE,
+            HANDLE_SIZE,
+            HANDLE_SIZE
+          );
+        }
+      });
+
+      // Base
+      drawCircle(base.x, base.y, base.radius, "base");
+
+      // Armor / Attack pads
+      drawCircle(armorPad.x, armorPad.y, armorPad.radius, "armor");
+      drawCircle(attackPad.x, attackPad.y, attackPad.radius, "attack");
+
+      // Spawns
+      playerSpawns.forEach((spawn, i) => {
+        const isSelected = selectedType === 'spawn' && selectedIndex === i;
+        drawSpawn(spawn, i, isSelected);
+      });
+
+      const noWallSelected = !(selectedType === "wall" && selectedIndex !== -1);
+      deleteBtn.disabled = noWallSelected;
+      duplicateBtn.disabled = noWallSelected;
+      deleteSpawnBtn.disabled = !(selectedType === 'spawn' && selectedIndex !== -1);
+    }
+
+    function drawGrid() {
+      ctx.save();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.15)";
+      ctx.lineWidth = 1;
+
+      for (let x = GRID_SIZE; x < canvas.width; x += GRID_SIZE) {
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, canvas.height);
+        ctx.stroke();
+      }
+
+      for (let y = GRID_SIZE; y < canvas.height; y += GRID_SIZE) {
+        ctx.beginPath();
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(canvas.width, y + 0.5);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    function drawCircle(x, y, radius, type) {
+      let fill, stroke, label;
+
+      switch (type) {
+        case "base":
+          fill = "rgba(45, 212, 191, 0.35)";
+          stroke = "#22d3ee";
+          label = "BASE";
+          break;
+        case "armor":
+          fill = "rgba(59, 130, 246, 0.5)";
+          stroke = "#3b82f6";
+          label = "ARMOR";
+          break;
+        case "attack":
+          fill = "rgba(239, 68, 68, 0.5)";
+          stroke = "#f97316";
+          label = "ATTACK";
+          break;
+      }
+
+      const isSelected =
+        (type === "base" && selectedType === "base") ||
+        (type === "armor" && selectedType === "armor") ||
+        (type === "attack" && selectedType === "attack");
+
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.strokeStyle = isSelected ? "#ffffff" : stroke;
+      ctx.stroke();
+
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = "12px Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, x, y - 6);
+      if (type === "armor" || type === "attack") {
+        ctx.font = "10px Arial";
+        ctx.fillText("5 Coins", x, y + 8);
+      }
+    }
+
+    // ---------- HIT TESTS ----------
+
+    function hitTestWall(x, y) {
+      for (let i = walls.length - 1; i >= 0; i--) {
+        const w = walls[i];
+        if (x >= w.x && x <= w.x + w.width && y >= w.y && y <= w.y + w.height) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function isOnWallHandle(w, x, y) {
+      return (
+        x >= w.x + w.width - HANDLE_SIZE &&
+        x <= w.x + w.width &&
+        y >= w.y + w.height - HANDLE_SIZE &&
+        y <= w.y + w.height
+      );
+    }
+
+    function hitTestCircle(obj, x, y) {
+      const dx = x - obj.x;
+      const dy = y - obj.y;
+      return dx * dx + dy * dy <= obj.radius * obj.radius;
+    }
+
+    function hitTestSpawn(x, y) {
+      // treat the spawn center as having a small square hitbox
+      const hitRadius = 20;
+      for (let i = playerSpawns.length - 1; i >= 0; i--) {
+        const s = playerSpawns[i];
+        const dx = x - s.x;
+        const dy = y - s.y;
+        if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    // ---------- MOUSE EVENTS ----------
+
+    canvas.addEventListener("mousedown", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // 0. Check spawns
+      const spawnIdx = hitTestSpawn(x, y);
+      if (spawnIdx !== -1) {
+        selectedType = 'spawn';
+        selectedIndex = spawnIdx;
+        dragMode = 'moveSpawn';
+        const s = playerSpawns[spawnIdx];
+        dragOffsetX = x - s.x;
+        dragOffsetY = y - s.y;
+        draw();
+        return;
+      }
+
+      // 1. Check circles first (base, armor, attack)
+      if (hitTestCircle(base, x, y)) {
+        selectBase();
+        dragMode = "moveCircle";
+        dragOffsetX = x - base.x;
+        dragOffsetY = y - base.y;
+        draw();
+        return;
+      }
+
+      if (hitTestCircle(armorPad, x, y)) {
+        selectArmor();
+        dragMode = "moveCircle";
+        dragOffsetX = x - armorPad.x;
+        dragOffsetY = y - armorPad.y;
+        draw();
+        return;
+      }
+
+      if (hitTestCircle(attackPad, x, y)) {
+        selectAttack();
+        dragMode = "moveCircle";
+        dragOffsetX = x - attackPad.x;
+        dragOffsetY = y - attackPad.y;
+        draw();
+        return;
+      }
+
+      // 2. Check walls
+      const idx = hitTestWall(x, y);
+      if (idx === -1) {
+        clearSelection();
+        draw();
+        return;
+      }
+
+      selectedType = "wall";
+      selectedIndex = idx;
+      const w = walls[selectedIndex];
+
+      if (isOnWallHandle(w, x, y)) {
+        dragMode = "resizeWall";
+        dragOffsetX = w.x + w.width - x;
+        dragOffsetY = w.y + w.height - y;
+      } else {
+        dragMode = "moveWall";
+        dragOffsetX = x - w.x;
+        dragOffsetY = y - w.y;
+      }
+
+      draw();
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+      if (!dragMode) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (dragMode === "moveWall" && selectedType === "wall" && selectedIndex !== -1) {
+        const w = walls[selectedIndex];
+        let newX = x - dragOffsetX;
+        let newY = y - dragOffsetY;
+
+        newX = Math.max(0, Math.min(canvas.width - w.width, newX));
+        newY = Math.max(0, Math.min(canvas.height - w.height, newY));
+
+        w.x = newX;
+        w.y = newY;
+        draw();
+      } else if (dragMode === "resizeWall" && selectedType === "wall" && selectedIndex !== -1) {
+        const w = walls[selectedIndex];
+        let newWidth = x + dragOffsetX - w.x;
+        let newHeight = y + dragOffsetY - w.y;
+
+        newWidth = Math.max(20, newWidth);
+        newHeight = Math.max(20, newHeight);
+        newWidth = Math.min(newWidth, canvas.width - w.x);
+        newHeight = Math.min(newHeight, canvas.height - w.y);
+
+        w.width = newWidth;
+        w.height = newHeight;
+        draw();
+      } else if (dragMode === "moveCircle" && selectedType) {
+        let target;
+        if (selectedType === "armor") target = armorPad;
+        if (selectedType === "attack") target = attackPad;
+        if (selectedType === "base") target = base;
+        if (!target) return;
+
+        let newX = x - dragOffsetX;
+        let newY = y - dragOffsetY;
+
+        // clamp to canvas
+        const r = target.radius;
+        newX = Math.max(r, Math.min(canvas.width - r, newX));
+        newY = Math.max(r, Math.min(canvas.height - r, newY));
+
+        target.x = newX;
+        target.y = newY;
+        draw();
+      }
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      dragMode = null;
+    });
+
+    canvas.addEventListener("mouseleave", () => {
+      dragMode = null;
+    });
+
+    // ---------- SELECTION HELPERS ----------
+
+    function clearSelection() {
+      selectedType = null;
+      selectedIndex = -1;
+      dragMode = null;
+    }
+
+    function selectArmor() {
+      selectedType = "armor";
+      selectedIndex = -1;
+    }
+
+    function selectAttack() {
+      selectedType = "attack";
+      selectedIndex = -1;
+    }
+
+    function selectBase() {
+      selectedType = "base";
+      selectedIndex = -1;
+    }
+
+    // ---------- BUTTONS & KEYBOARD ----------
+
+    addBtn.addEventListener("click", () => {
+      const newWall = {
+        x: canvas.width / 2 - 100,
+        y: canvas.height / 2 - 25,
+        width: 200,
+        height: 50,
+      };
+      walls.push(newWall);
+      selectedType = "wall";
+      selectedIndex = walls.length - 1;
+      draw();
+    });
+
+    deleteBtn.addEventListener("click", () => {
+      deleteSelectedWall();
+    });
+
+    duplicateBtn.addEventListener("click", () => {
+      duplicateSelectedWall();
+    });
+
+    copyBtn.addEventListener("click", () => {
+      if (!exportBox.value.trim()) {
+        exportJSON();
+      }
+      copyJSONToClipboard();
+    });
+
+    addSpawnBtn.addEventListener('click', () => {
+      const index = playerSpawns.length + 1;
+      const newSpawn = {
+        id: `SP${index}`,
+        x: canvas.width / 2,
+        y: canvas.height / 2
+      };
+      playerSpawns.push(newSpawn);
+      selectedType = 'spawn';
+      selectedIndex = playerSpawns.length - 1;
+      draw();
+    });
+
+    function deleteSelectedSpawn() {
+      if (selectedType === 'spawn' && selectedIndex !== -1) {
+        playerSpawns.splice(selectedIndex, 1);
+        if (playerSpawns.length === 0) {
+          selectedType = null;
+          selectedIndex = -1;
+        } else {
+          selectedIndex = Math.min(selectedIndex, playerSpawns.length - 1);
+        }
+        draw();
+      }
+    }
+
+    deleteSpawnBtn.addEventListener('click', deleteSelectedSpawn);
+
+    function deleteSelectedWall() {
+      if (selectedType === "wall" && selectedIndex !== -1) {
+        walls.splice(selectedIndex, 1);
+        if (walls.length === 0) {
+          clearSelection();
+        } else {
+          selectedIndex = Math.min(selectedIndex, walls.length - 1);
+        }
+        draw();
+      }
+    }
+
+    function duplicateSelectedWall() {
+      if (selectedType === "wall" && selectedIndex !== -1) {
+        const w = walls[selectedIndex];
+        const duplicate = {
+          x: Math.min(w.x + 20, canvas.width - w.width),
+          y: Math.min(w.y + 20, canvas.height - w.height),
+          width: w.width,
+          height: w.height,
+        };
+        walls.splice(selectedIndex + 1, 0, duplicate);
+        selectedIndex += 1;
+        draw();
+      }
+    }
+
+    function copyJSONToClipboard() {
+      const text = exportBox.value;
+      if (!text) return;
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard
+          .writeText(text)
+          .then(showCopyFeedback)
+          .catch(() => {
+            fallbackCopy(text);
+            showCopyFeedback();
+          });
+      } else {
+        fallbackCopy(text);
+        showCopyFeedback();
+      }
+    }
+
+    function fallbackCopy(text) {
+      const tempArea = document.createElement("textarea");
+      tempArea.value = text;
+      tempArea.style.position = "fixed";
+      tempArea.style.left = "-9999px";
+      document.body.appendChild(tempArea);
+      tempArea.focus();
+      tempArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(tempArea);
+    }
+
+    function showCopyFeedback() {
+      copyBtn.textContent = "Copied!";
+      clearTimeout(copyBtnResetTimeout);
+      copyBtnResetTimeout = setTimeout(() => {
+        copyBtn.textContent = COPY_BUTTON_DEFAULT;
+      }, 1200);
+    }
+
+    function downloadJSON(filename, dataObj) {
+      const json = JSON.stringify(dataObj, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportJSON() {
+      const data = {
+        arena: { width: 1600, height: 900 },
+        walls,
+        armorPad,
+        attackPad,
+        armorPad,
+        attackPad,
+        base,
+        playerSpawns,
+      };
+      const json = JSON.stringify(data, null, 2);
+      exportBox.value = json;
+      console.log("LEVEL DATA =", data);
+      downloadJSON('level.json', data);
+    }
+
+    exportBtn.addEventListener("click", exportJSON);
+
+    window.addEventListener("keydown", (e) => {
+      const key = e.key.toLowerCase();
+      if (key === "p") {
+        exportJSON();
+      }
+      if ((key === "delete" || key === "backspace")) {
+        e.preventDefault();
+        if (selectedType === "wall") deleteSelectedWall();
+        if (selectedType === "spawn") deleteSelectedSpawn();
+      }
+    });
+
+    // Initial render
+    draw();
+  </script>
+</body>
+
+</html>

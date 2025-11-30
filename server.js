@@ -12,7 +12,10 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Constants ---
-const ARENA = { width: 1600, height: 900, padding: 20 };
+// --- Constants ---
+const levelConfig = require(path.join(__dirname, 'public', 'config', 'level.json'));
+
+const ARENA = { ...levelConfig.arena, padding: 20 };
 const PLAYER_MAX_HP = 100;
 const ENEMY_MAX_HP = 10;
 const PLAYER_HIT_DISTANCE = 30;
@@ -36,8 +39,8 @@ const GATE = {
 };
 
 const BASE = {
-  x: ARENA.width / 2,
-  y: ARENA.height - 80,
+  x: levelConfig.base.x,
+  y: levelConfig.base.y,
   maxHp: 100,
 };
 
@@ -65,13 +68,9 @@ const ENEMY_BASE_CONTACT_DISTANCE = 40;
 const BASE_DAMAGE_PER_TICK = 3;
 
 // Server-side wall constraints (matching client LEVEL_WALLS)
-const LANE_WALLS = [
-  { x: 100, y: 80, width: 1400, height: 40 },
-  { x: 100, y: 80, width: 40, height: 740 },
-  { x: 1460, y: 80, width: 40, height: 740 },
-  { x: 300, y: 280, width: 1000, height: 40 },
-  { x: 300, y: 580, width: 1000, height: 40 },
-];
+const LANE_WALLS = levelConfig.walls;
+
+const MAX_PLAYERS_PER_ROOM = (levelConfig.playerSpawns && levelConfig.playerSpawns.length) || 8;
 
 // --- State ---
 const rooms = new Map();
@@ -90,6 +89,8 @@ const generateRoomId = () => {
 
 // --- Helpers ---
 const createPlayer = (id, name) => {
+  // Initial position will be set when game starts/restarts
+  // For lobby, we can just put them in center or random
   const pos = randomInArena();
   return {
     id,
@@ -97,8 +98,6 @@ const createPlayer = (id, name) => {
     ...pos,
     hp: PLAYER_MAX_HP,
     maxHp: PLAYER_MAX_HP,
-    isDead: false,
-    coins: 0,
     isDead: false,
     coins: 0,
     armorLevel: 1,
@@ -165,7 +164,6 @@ const createProjectile = (player, dir) => {
     vx: norm.x * PROJECTILE_SPEED,
     vy: norm.y * PROJECTILE_SPEED,
     spawnTime: Date.now(),
-    spawnTime: Date.now(),
     damage: PROJECTILE_DAMAGE_BASE * player.attackLevel,
   };
 };
@@ -189,14 +187,14 @@ const createRoom = (roomId) => ({
     nextWaveTimeoutId: null,
   },
   armorPad: {
-    x: ARENA.width * 0.25,
-    y: ARENA.height * 0.75,
-    radius: 50,
+    x: levelConfig.armorPad.x,
+    y: levelConfig.armorPad.y,
+    radius: levelConfig.armorPad.radius,
   },
   attackPad: {
-    x: ARENA.width * 0.75,
-    y: ARENA.height * 0.75,
-    radius: 50,
+    x: levelConfig.attackPad.x,
+    y: levelConfig.attackPad.y,
+    radius: levelConfig.attackPad.radius,
   },
 });
 
@@ -319,7 +317,17 @@ const restartGame = (room) => {
   room.phase = 'combat';
 
   // Reset players
+  const spawns = levelConfig.playerSpawns && levelConfig.playerSpawns.length
+    ? levelConfig.playerSpawns
+    : [{ x: ARENA.width / 2, y: ARENA.height / 2 }];
+
+  let index = 0;
   room.players.forEach((p) => {
+    const spawn = spawns[index % spawns.length];
+    p.x = spawn.x;
+    p.y = spawn.y;
+    index++;
+
     p.hp = PLAYER_MAX_HP;
     p.maxHp = PLAYER_MAX_HP;
     p.isDead = false;
@@ -327,9 +335,6 @@ const restartGame = (room) => {
     p.armorLevel = 1;
     p.attackLevel = 1;
     p.isReady = true; // Auto-ready for restart
-    const pos = randomInArena();
-    p.x = pos.x;
-    p.y = pos.y;
   });
 
   startRoomLoops(room);
@@ -450,7 +455,7 @@ const moveEnemies = (room) => {
         const target = room.players.get(enemy.chaseTargetId);
         if (!target || target.isDead) {
           // Target lost/dead, return to path/goal
-          enemy.mode = enemy.pathIndex < PATH_NODES.length ? 'path' : 'goal';
+          enemy.mode = enemy.pathIndex < PATH_LEFT.length ? 'path' : 'goal'; // Assuming PATH_LEFT is representative
           enemy.chaseTargetId = null;
         } else {
           const dx = target.x - enemy.x;
@@ -458,7 +463,7 @@ const moveEnemies = (room) => {
           const distSq = dx * dx + dy * dy;
           if (distSq > ENEMY_LOSE_PLAYER_RADIUS * ENEMY_LOSE_PLAYER_RADIUS) {
             // Target too far, return to path/goal
-            enemy.mode = enemy.pathIndex < PATH_NODES.length ? 'path' : 'goal';
+            enemy.mode = enemy.pathIndex < PATH_LEFT.length ? 'path' : 'goal'; // Assuming PATH_LEFT is representative
             enemy.chaseTargetId = null;
           } else {
             targetX = target.x;
@@ -666,10 +671,18 @@ const startRoomLoops = (room) => {
   room.coins.clear();
   room.baseHp = BASE.maxHp;
   room.baseMaxHp = BASE.maxHp;
+
+  const spawns = levelConfig.playerSpawns && levelConfig.playerSpawns.length
+    ? levelConfig.playerSpawns
+    : [{ x: ARENA.width / 2, y: ARENA.height / 2 }];
+
+  let index = 0;
   room.players.forEach((p) => {
-    const pos = randomInArena();
-    p.x = pos.x;
-    p.y = pos.y;
+    const spawn = spawns[index % spawns.length];
+    p.x = spawn.x;
+    p.y = spawn.y;
+    index++;
+
     p.hp = PLAYER_MAX_HP;
     p.maxHp = PLAYER_MAX_HP;
     p.isDead = false;
@@ -758,6 +771,12 @@ io.on('connection', (socket) => {
       socket.emit('errorMessage', { message: 'Room not found' });
       return;
     }
+
+    if (room.players.size >= MAX_PLAYERS_PER_ROOM) {
+      socket.emit('errorMessage', { message: 'Room is full (no free spawn slots)' });
+      return;
+    }
+
     const player = createPlayer(socket.id, name);
     player.isHost = false;
     room.players.set(socket.id, player);

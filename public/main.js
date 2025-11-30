@@ -33,20 +33,11 @@ const state = {
   pendingPlayers: null,
 };
 
-const ARENA = { width: 1600, height: 900 };
-const FIRE_COOLDOWN_MS = 300;
-
-// Define the U-shaped corridor walls
-const LEVEL_WALLS = [
-  // Outer walls (U-shape)
-  { x: 100, y: 80, width: 1400, height: 40 },   // Top horizontal
-  { x: 100, y: 80, width: 40, height: 740 },    // Left vertical
-  { x: 1460, y: 80, width: 40, height: 740 },   // Right vertical
-
-  // Inner horizontal bars (creating the lanes)
-  { x: 300, y: 280, width: 1000, height: 40 },  // Top inner horizontal
-  { x: 300, y: 580, width: 1000, height: 40 },  // Bottom inner horizontal
-];
+async function loadLevelConfig() {
+  const res = await fetch('/config/level.json');
+  if (!res.ok) throw new Error('Failed to load level config');
+  return res.json();
+}
 
 const createCircleTexture = (scene, key, color, size = 32) => {
   if (scene.textures.exists(key)) return;
@@ -143,7 +134,16 @@ class ArenaScene extends Phaser.Scene {
       SPACE: Phaser.Input.Keyboard.KeyCodes.SPACE,
     });
 
+    this.levelConfig = window.LEVEL_CONFIG;
+    this.arena = this.levelConfig.arena;
+    this.walls = this.levelConfig.walls;
+    this.baseConfig = this.levelConfig.base;
+    this.armorPadConfig = this.levelConfig.armorPad;
+    this.attackPadConfig = this.levelConfig.attackPad;
+    this.playerSpawns = this.levelConfig.playerSpawns || [];
+
     this.drawCorridorAndBase();
+    this.drawSpawns();
     this.createHud();
     this.drawShopPads();
     this.drawGate();
@@ -170,17 +170,17 @@ class ArenaScene extends Phaser.Scene {
   }
 
   drawCorridorAndBase() {
-    // Draw walls using LEVEL_WALLS
+    // Draw walls using this.walls
     const wallsG = this.add.graphics();
     wallsG.fillStyle(0x3b82f6, 0.3); // Light blue walls
-    LEVEL_WALLS.forEach(wall => {
+    this.walls.forEach(wall => {
       wallsG.fillRect(wall.x, wall.y, wall.width, wall.height);
     });
 
     // Base
-    const baseRadius = 40;
-    const baseY = ARENA.height - 80;
-    const baseX = ARENA.width / 2;
+    const baseRadius = this.baseConfig.radius;
+    const baseY = this.baseConfig.y;
+    const baseX = this.baseConfig.x;
     const baseG = this.add.graphics();
     baseG.fillStyle(0x22d3ee, 0.5);
     baseG.fillCircle(baseX, baseY, baseRadius);
@@ -191,6 +191,26 @@ class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5);
   }
 
+  drawSpawns() {
+    if (!this.playerSpawns.length) return;
+    const g = this.add.graphics();
+    g.lineStyle(2, 0xfacc15, 0.5); // Yellow-ish, semi-transparent
+    const size = 10;
+    this.playerSpawns.forEach((spawn, i) => {
+      const { x, y } = spawn;
+      g.beginPath();
+      g.moveTo(x - size, y - size);
+      g.lineTo(x + size, y + size);
+      g.moveTo(x + size, y - size);
+      g.lineTo(x - size, y + size);
+      g.strokePath();
+
+      this.add.text(x, y + size + 4, `P${i + 1}`, {
+        fontFamily: 'Arial', fontSize: '10px', color: '#facc15'
+      }).setOrigin(0.5, 0).setAlpha(0.5);
+    });
+  }
+
   drawShopPads() {
     if (this.armorPad) this.armorPad.destroy();
     if (this.attackPad) this.attackPad.destroy();
@@ -198,8 +218,8 @@ class ArenaScene extends Phaser.Scene {
     // Armor Pad (Left) - Blue Semicircle
     const armorG = this.add.graphics();
     armorG.fillStyle(0x3b82f6, 0.3);
-    armorG.fillCircle(0, 0, 50);
-    this.armorPad = this.add.container(ARENA.width * 0.25, ARENA.height * 0.75, [armorG]);
+    armorG.fillCircle(0, 0, this.armorPadConfig.radius);
+    this.armorPad = this.add.container(this.armorPadConfig.x, this.armorPadConfig.y, [armorG]);
     const armorLabel = this.add.text(0, 0, 'ARMOR\n5 Coins', {
       fontFamily: 'Arial', fontSize: '14px', color: '#3b82f6', align: 'center'
     }).setOrigin(0.5);
@@ -208,8 +228,8 @@ class ArenaScene extends Phaser.Scene {
     // Attack Pad (Right) - Red Semicircle
     const attackG = this.add.graphics();
     attackG.fillStyle(0xef4444, 0.3);
-    attackG.fillCircle(0, 0, 50);
-    this.attackPad = this.add.container(ARENA.width * 0.75, ARENA.height * 0.75, [attackG]);
+    attackG.fillCircle(0, 0, this.attackPadConfig.radius);
+    this.attackPad = this.add.container(this.attackPadConfig.x, this.attackPadConfig.y, [attackG]);
     const attackLabel = this.add.text(0, 0, 'ATTACK\n5 Coins', {
       fontFamily: 'Arial', fontSize: '14px', color: '#ef4444', align: 'center'
     }).setOrigin(0.5);
@@ -431,7 +451,7 @@ class ArenaScene extends Phaser.Scene {
 
   isInsideWall(x, y, radius = 16) {
     // Check if a circle at (x, y) with given radius overlaps any wall
-    for (const wall of LEVEL_WALLS) {
+    for (const wall of this.walls) {
       // AABB vs Circle collision
       const closestX = Math.max(wall.x, Math.min(x, wall.x + wall.width));
       const closestY = Math.max(wall.y, Math.min(y, wall.y + wall.height));
@@ -662,11 +682,11 @@ const wireSocket = () => {
 // --- Game boot ---
 const startGame = () => {
   showPanel(null);
-  if (!state.game) {
+  if (!state.game && window.LEVEL_CONFIG) {
     const config = {
       type: Phaser.AUTO,
-      width: ARENA.width,
-      height: ARENA.height,
+      width: window.LEVEL_CONFIG.arena.width,
+      height: window.LEVEL_CONFIG.arena.height,
       backgroundColor: GAME_COLORS.bg,
       scale: {
         mode: Phaser.Scale.FIT,
@@ -730,7 +750,10 @@ const wireUi = () => {
 
 // --- Init ---
 window.addEventListener('load', () => {
-  wireUi();
-  wireSocket();
-  console.log('main.js loaded');
+  loadLevelConfig().then((levelConfig) => {
+    window.LEVEL_CONFIG = levelConfig;
+    wireUi();
+    wireSocket();
+    console.log('main.js loaded with config');
+  }).catch(console.error);
 });
